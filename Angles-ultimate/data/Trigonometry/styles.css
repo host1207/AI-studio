@@ -1,0 +1,43 @@
+<css-id: qa-trg>
+.trg-root-title {
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-align: center;
+  text-transform: uppercase;
+  color: #FFFFFF;
+  line-height: 1.2;
+}
+.trg-sub-title {
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-align: center;
+  color: #FFFFFF;
+  line-height: 1.25;
+}
+.trg-card-head {
+  font-size: 18px;
+  font-weight: 800;
+  margin-bottom: 10px;
+  text-align: left;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+  line-height: 1.25;
+}
+.trg-card-body {
+  font-size: 15px;
+  line-height: 1.65;
+  text-align: left;
+}
+.trg-card-body .angle-table {
+  margin: 12px auto 0;
+  font-size: 14px;
+}
+.trg-card-body .mkml-callout {
+  margin-top: 10px;
+  text-align: left;
+  font-size: 14px;
+}

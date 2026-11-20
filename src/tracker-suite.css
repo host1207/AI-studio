@@ -1,0 +1,34 @@
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+#tracker-root,
+#tracker-root *,
+#tracker-root *::before,
+#tracker-root *::after {
+  box-sizing: border-box;
+  border-width: 0;
+  border-style: solid;
+  border-color: #dfddd4;
+}
+
+#tracker-root h1,
+#tracker-root h2,
+#tracker-root h3,
+#tracker-root h4,
+#tracker-root p {
+  margin: 0;
+}
+
+#tracker-root button,
+#tracker-root input,
+#tracker-root select,
+#tracker-root textarea {
+  font: inherit;
+  color: inherit;
+  margin: 0;
+}
+
+#tracker-root table {
+  border-collapse: collapse;
+}

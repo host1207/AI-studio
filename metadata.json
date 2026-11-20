@@ -1,0 +1,6 @@
+{
+  "name": "Angles MKML Studio & Converter",
+  "description": "Convert text, photos, and PDFs to canonical Angles MKML syntax with live KaTeX math preview, interactive quizzes, and batch analytics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

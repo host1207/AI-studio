@@ -1,0 +1,450 @@
+<!-- angles-root-mid: TRG -->
+<Domain == QA>
+<Chapter == QA-TRG>
+<link-css-id: qa-trg>
+
+<!-- Outer Dark Container for TRG.C1 (X = 1..41, Y = 6..48) -->
+<mid = c1>
+<Subtopic == QA-TRG-BS>
+  <box points = (1,6),(41,6),(41,48),(1,48) background-color = #0F172A color = #334155></box>
+
+  <!-- Root Chapter Title centered across X = 1..41 -->
+  <box points = (12,1),(30,1),(30,4),(12,4) background-color = #1E3A8A color = #FFFFFF>
+    <div class="trg-root-title">TRIGONOMETRY (QA-TRG)</div>
+  </box>
+
+  <!-- Priority Flowchart Wiring -->
+  <line m color = #38BDF8>(21,4),(21,7)</line m>
+  <line m color = #38BDF8>(21,10),(21,12)</line m>
+  <line m color = #38BDF8>(21,11),(8,11),(8,12)</line m>
+  <line m color = #38BDF8>(21,11),(33,11),(33,12)</line m>
+  <line m color = #14B8A6>(11,26),(11,29)</line m>
+  <line m color = #3B82F6>(31,26),(31,29)</line m>
+  <line m color = #38BDF8>(11,38),(11,39),(31,39),(31,38)</line m>
+  <line m color = #38BDF8>(21,39),(21,41)</line m>
+
+  <!-- Subtopic 1 Header (X = 9..33, Y = 7..10) -->
+  <box points = (9,7),(33,7),(33,10),(9,10) background-color = #0D9488 color = #FFFFFF>
+    <div class="trg-sub-title">1) Basics &amp; Fundamental Ratios (QA-TRG-BS · TRG.C1)</div>
+  </box>
+
+  <Concept == QA-TRG-BS-FR>
+    <!-- MC1 (T1): Left Column (X = 3..14, Y = 12..26) -->
+    <MC == QA-TRG-BS-FR-MC1>
+      <box points = (3,12),(14,12),(14,26),(3,26) background-color = #F8FAFC color = #0F172A>
+        <div class="trg-card-head">MC1 (T1): Right-Triangle Ratios</div>
+        <div class="trg-card-body">
+          • <math == sin theta = oppo / hypo><br>
+          • <math == cos theta = Adj / hypo><br>
+          • <math == tan theta = oppo / Adj><br>
+          • <math == cosec theta = hypo / oppo><br>
+          • <math == sec theta = hypo / Adj><br>
+          • <math == cot theta = Adj / oppo>
+          <rule == 3-4-5 Tri: <math == sin alpha + cos beta = 6/5>>
+        </div>
+      </box>
+    </MC>
+
+    <!-- Center White Canvas Card for Right-Triangle Geometry (X = 15..27, Y = 12..26) -->
+    <box points = (15,12),(27,12),(27,26),(15,26) background-color = #FFFFFF color = #CBD5E1></box>
+
+    <box w points = (16,12),(26,12),(26,14),(16,14) text-color = #0F172A>Right Triangle ΔABC (∠B = 90°)</box w>
+
+    <line d line-color = #2563EB text-color = #1D4ED8>(18,23),(18,16) O = 3</line d>
+    <line d line-color = #059669 text-color = #047857>(18,23),(25,23) A = 4</line d>
+    <line d line-color = #E11D48 text-color = #BE123C>(18,16),(25,23) H = 5</line d>
+
+    <box w points = (16,24),(26,24),(26,26),(16,26) text-color = #0F172A>3-4-5 Triplet · sin θ = 3/5 · cos θ = 4/5</box w>
+
+    <!-- MC2 (T2): Right Column (X = 28..39, Y = 12..26) -->
+    <MC == QA-TRG-BS-FR-MC2>
+      <box points = (28,12),(39,12),(39,26),(28,26) background-color = #FEF9E7 color = #78350F>
+        <div class="trg-card-head">MC2 (T2): Triplets Generator</div>
+        <div class="trg-card-body">
+          • <b>Odd n:</b> <math == n -> (n^2 - 1)/2 , (n^2 + 1)/2><br>
+          • <b>Even y:</b> <math == y -> y^2 / 2 = A><br>
+          <table r = 2 c = 2>
+            <c11 = <b>(3, 4, 5)</b>> <c12 = <b>(5, 12, 13)</b>>
+            <c21 = (8, 15, 17)> <c22 = (9, 40, 41)>
+          </table>
+        </div>
+      </box>
+    </MC>
+
+    <!-- MC3 (T3): Bottom-Left (X = 3..20, Y = 29..38) -->
+    <MC == QA-TRG-BS-FR-MC3>
+      <box points = (3,29),(20,29),(20,38),(3,38) background-color = #ECFDF5 color = #065F46>
+        <div class="trg-card-head">MC3 (T3): Dual-Vertex Switch</div>
+        <div class="trg-card-body">
+          • In right <math == tri ABC> (<math == ang B = 90 deg>): <math == A + C = 90 deg><br>
+          • <math == sin A = cos C> &nbsp;|&nbsp; <math == tan A = cot C><br>
+          • <math == sin^2 theta + cos^2 theta = 1>
+        </div>
+      </box>
+    </MC>
+
+    <!-- TG: Bottom-Right (X = 22..39, Y = 29..38) -->
+    <MC == QA-TRG-BS-FR-TG>
+      <box points = (22,29),(39,29),(39,38),(22,38) background-color = #FFF1F2 color = #881337>
+        <div class="trg-card-head">TG: Algebraic Substitution</div>
+        <div class="trg-card-body">
+          • Homogeneous: <math == sin theta / cos theta = a / b><br>
+          • Conjugate: <math == sec^2 theta - tan^2 theta = 1><br>
+          • Reciprocal: <math == cosec^2 theta - cot^2 theta = 1>
+        </div>
+      </box>
+    </MC>
+
+    <!-- Scoped Concept Question Placeholder Node (X = 13..29, Y = 41..46) -->
+    <box points = (13,41),(29,41),(29,46),(13,46) background-color = #EFF6FF color = #1E40AF>
+      <qn all mode = normal>
+        <Qn>
+          <id == QA-TRG-BS-FR-1>
+          <mid = TRG.C1>
+          <step id = T1>
+          <type = Quantitative Aptitude>
+          <text = 1) If <math == tan A = 4/3>, <math == 0 deg <= A <= 90 deg>, then find the value of <math == sin A>.>
+          <Options>
+            <A = 4/5>
+            <B = 3/5>
+            <C = 3/4>
+            <D = 5/4>
+          </Options>
+          <answer = A>
+          <explanation = tan A = 4/3 => oppo = 4, Adj = 3. By the (3, 4, 5) Pythagorean triplet, hypo = 5, so sin A = oppo / hypo = 4/5.>
+        </Qn>
+        <Qn>
+          <id == QA-TRG-BS-FR-2>
+          <mid = TRG.C1>
+          <step id = T2>
+          <type = Quantitative Aptitude>
+          <text = 2) If <math == sin theta = 9/41>, <math == 0 deg <= theta <= 90 deg>, then find <math == cot theta>. [SSC CGL Mains 2022]>
+          <Options>
+            <A = 9/40>
+            <B = 40/9>
+            <C = 41/40>
+            <D = 40/41>
+          </Options>
+          <answer = B>
+          <explanation = sin θ = 9/41 => 9 (oppo) is odd: 9² = 81 -> 81/2 = 40.5 -> 40 (adj), 41 (hypo). Therefore cot θ = adj / oppo = 40/9.>
+        </Qn>
+        <Qn>
+          <id == QA-TRG-BS-FR-3>
+          <mid = TRG.C1>
+          <step id = TG>
+          <type = Quantitative Aptitude>
+          <text = 3) If <math == tan A = 2/5>, find <math == sec^2 A / cosec^2 A> ? [SSC CPO]>
+          <Options>
+            <A = 2/5>
+            <B = 4/25>
+            <C = 25/4>
+            <D = 4/29>
+          </Options>
+          <answer = B>
+          <explanation = sec²A / cosec²A = sin²A / cos²A = tan²A = (2/5)² = 4/25.>
+        </Qn>
+        <Qn>
+          <id == QA-TRG-BS-FR-4>
+          <mid = TRG.C1>
+          <step id = TG>
+          <type = Quantitative Aptitude>
+          <text = 4) If <math == sin beta = 1/3>, find <math == (sec beta - tan beta)^3> = ?>
+          <Options>
+            <A = 1 / √8>
+            <B = 1 / 8>
+            <C = √8 / 3>
+            <D = 2 / √8>
+          </Options>
+          <answer = A>
+          <explanation = sin β = 1/3 => oppo = 1, hypo = 3, Adj = √(9 - 1) = √8. Then (sec β - tan β)³ = (3/√8 - 1/√8)³ = (2/√8)³ = 8 / (8√8) = 1/√8.>
+        </Qn>
+        <Qn>
+          <id == QA-TRG-BS-FR-5>
+          <mid = TRG.C1>
+          <step id = T1>
+          <type = Quantitative Aptitude>
+          <text = 5) If <math == cos theta = sqrt(3) / 2>, find <math == tan^2 theta * cos^2 theta> = ? [SSC CGL 2023]>
+          <Options>
+            <A = 1/2>
+            <B = 1/3>
+            <C = 1/4>
+            <D = 3/4>
+          </Options>
+          <answer = C>
+          <explanation = cos θ = √3/2 => adj = √3, hypo = 2, oppo = 1. Thus tan²θ × cos²θ = sin²θ = (1/2)² = 1/4.>
+        </Qn>
+        <Qn>
+          <id == QA-TRG-BS-FR-6>
+          <mid = TRG.C1>
+          <step id = TG>
+          <type = Quantitative Aptitude>
+          <text = 6) If <math == 5 sin theta - 4 cos theta = 0>, find <math == (5 sin theta + 2 cos theta) / (5 sin theta + 3 cos theta)> = ? [SSC CGL 2023]>
+          <Options>
+            <A = 5/7>
+            <B = 6/7>
+            <C = 4/7>
+            <D = 3/7>
+          </Options>
+          <answer = B>
+          <explanation = 5 sin θ = 4 cos θ => take sin θ = 4, cos θ = 5. Then [5(4) + 2(5)] / [5(4) + 3(5)] = 30 / 35 = 6/7.>
+        </Qn>
+        <Qn>
+          <id == QA-TRG-BS-FR-7>
+          <mid = TRG.C1>
+          <step id = T1>
+          <type = Quantitative Aptitude>
+          <text = 7) If <math == tan theta = 3/4>, then find <math == (1 + sin theta) / (1 - sin theta)> = ?>
+          <Options>
+            <A = 2>
+            <B = 3>
+            <C = 4>
+            <D = 5>
+          </Options>
+          <answer = C>
+          <explanation = tan θ = 3/4 => oppo = 3, adj = 4, hypo = 5 => sin θ = 3/5. Then (1 + 3/5) / (1 - 3/5) = (8/5) / (2/5) = 4.>
+        </Qn>
+        <Qn>
+          <id == QA-TRG-BS-FR-8>
+          <mid = TRG.C1>
+          <step id = TG>
+          <type = Quantitative Aptitude>
+          <text = 8) If <math == 5 cot theta = 3>, then find <math == (6 sin theta - 3 cos theta) / (7 sin theta + 3 cos theta)> = ? [SSC CGL Prelims 2023]>
+          <Options>
+            <A = 21/44>
+            <B = 39/44>
+            <C = 21/35>
+            <D = 19/44>
+          </Options>
+          <answer = A>
+          <explanation = cot θ = 3/5 => cos θ = 3, sin θ = 5. Substituting: [6(5) - 3(3)] / [7(5) + 3(3)] = (30 - 9) / (35 + 9) = 21/44.>
+        </Qn>
+        <Qn>
+          <id == QA-TRG-BS-FR-9>
+          <mid = TRG.C1>
+          <step id = TG>
+          <type = Quantitative Aptitude>
+          <text = 9) If <math == sin A = 2/5>, find the value of <math == (5 sin A + 2 cosec A) / (sqrt(21) sec A)> = ? [SSC CHSL 2023]>
+          <Options>
+            <A = 5/7>
+            <B = 7/5>
+            <C = 2/5>
+            <D = 7/21>
+          </Options>
+          <answer = B>
+          <explanation = sin A = 2/5 => oppo = 2, hypo = 5, adj = √21 => sec A = 5/√21, cosec A = 5/2. Then [5(2/5) + 2(5/2)] / [√21(5/√21)] = (2 + 5)/5 = 7/5.>
+        </Qn>
+        <Qn>
+          <id == QA-TRG-BS-FR-10>
+          <mid = TRG.C1>
+          <step id = TG>
+          <type = Quantitative Aptitude>
+          <text = 10) If <math == sec A = 17/8>, find the value of <math == (34 sin A + 15 cot A) / (68 cos A - 16 tan A)> = ?>
+          <Options>
+            <A = 17>
+            <B = 19>
+            <C = 21>
+            <D = 38>
+          </Options>
+          <answer = B>
+          <explanation = By the (8, 15, 17) triplet, cos A = 8/17, sin A = 15/17, tan A = 15/8, cot A = 8/15. Then [34(15/17) + 15(8/15)] / [68(8/17) - 16(15/8)] = (30 + 8) / (32 - 30) = 19.>
+        </Qn>
+        <Qn>
+          <id == QA-TRG-BS-FR-11>
+          <mid = TRG.C1>
+          <step id = TG>
+          <type = Quantitative Aptitude>
+          <text = 11) If <math == (3 sin theta - cos theta) / (cos theta + sin theta) = 1>, then find <math == cot theta> = ?>
+          <Options>
+            <A = 0>
+            <B = 1>
+            <C = 1/2>
+            <D = 2>
+          </Options>
+          <answer = B>
+          <explanation = 3 sin θ - cos θ = cos θ + sin θ => 2 sin θ = 2 cos θ => cot θ = 1.>
+        </Qn>
+        <Qn>
+          <id == QA-TRG-BS-FR-12>
+          <mid = TRG.C1>
+          <step id = TG>
+          <type = Quantitative Aptitude>
+          <text = 12) If <math == (sin theta - cos theta) / (sin theta + cos theta) = 4/5>, find <math == cosec^2 theta / (2 - cosec^2 theta)> = ? [SSC CHSL]>
+          <Options>
+            <A = 40/41>
+            <B = 41/40>
+            <C = 82/81>
+            <D = 81/80>
+          </Options>
+          <answer = B>
+          <explanation = 5 sin θ - 5 cos θ = 4 sin θ + 4 cos θ => sin θ = 9 cos θ => cot θ = 1/9 => cosec²θ = 1 + 1/81 = 82/81. Then (82/81) / (2 - 82/81) = 82 / 80 = 41/40.>
+        </Qn>
+        <Qn>
+          <id == QA-TRG-BS-FR-13>
+          <mid = TRG.C1>
+          <step id = TG>
+          <type = Quantitative Aptitude>
+          <text = 13) If <math == sec theta = a/b>, then find <math == (1 - tan^2 theta) / (2 - sin^2 theta)> = ? [SSC CGL Mains]>
+          <Options>
+            <A = a²(2b² - a²) / [b²(a² + b²)]>
+            <B = b²(2a² - b²) / [a²(a² + b²)]>
+            <C = a²(a² - 2b²) / [b²(a² + b²)]>
+            <D = (2b² - a²) / (a² + b²)>
+          </Options>
+          <answer = A>
+          <explanation = sec θ = a/b => hypo = a, adj = b, oppo² = a² - b². Then 1 - tan²θ = (2b² - a²)/b² and 2 - sin²θ = (a² + b²)/a², yielding a²(2b² - a²) / [b²(a² + b²)].>
+        </Qn>
+        <Qn>
+          <id == QA-TRG-BS-FR-14>
+          <mid = TRG.C1>
+          <step id = TG>
+          <type = Quantitative Aptitude>
+          <text = 14) If <math == sin^2 theta / (tan^2 theta - sin^2 theta) = 5>, find <math == (24 sin^2 theta - 15 sec^2 theta) / (6 cosec^2 theta - 7 cot^2 theta)> = ?>
+          <Options>
+            <A = 14>
+            <B = -14>
+            <C = -12>
+            <D = 12>
+          </Options>
+          <answer = B>
+          <explanation = tan²θ - sin²θ = tan²θ sin²θ => 1 / tan²θ = 5 => cot²θ = 5. Substituting ratios gives -14.>
+        </Qn>
+        <Qn>
+          <id == QA-TRG-BS-FR-15>
+          <mid = TRG.C1>
+          <step id = TG>
+          <type = Quantitative Aptitude>
+          <text = 15) If <math == (sec theta - tan theta) / (sec theta + tan theta) = 1/7>, find <math == (cosec theta + cot^2 theta) / (cosec theta - cot^2 theta)> = ?>
+          <Options>
+            <A = 19/5>
+            <B = 5/19>
+            <C = 17/5>
+            <D = 19/9>
+          </Options>
+          <answer = A>
+          <explanation = By componendo-dividendo, sec θ / tan θ = 8/6 = 4/3 => cosec θ = 4/3 and cot²θ = 7/9. Then (4/3 + 7/9) / (4/3 - 7/9) = 19/5.>
+        </Qn>
+        <Qn>
+          <id == QA-TRG-BS-FR-16>
+          <mid = TRG.C1>
+          <step id = T3>
+          <type = Quantitative Aptitude>
+          <text = 15b) In <math == tri ABC> right-angled at <math == B>, if <math == tan A = 1 / sqrt(3)>, find <math == sin A cos C + cos A sin C> = ?>
+          <Options>
+            <A = 0>
+            <B = 1/2>
+            <C = 1>
+            <D = √3 / 2>
+          </Options>
+          <answer = C>
+          <explanation = In right ΔABC, A + C = 90°, so sin A cos C + cos A sin C = sin(A + C) = sin 90° = 1.>
+        </Qn>
+        <Qn>
+          <id == QA-TRG-BS-FR-17>
+          <mid = TRG.C1>
+          <step id = T3>
+          <type = Quantitative Aptitude>
+          <text = 16) In <math == tri ABC> right-angled at <math == B>, if <math == tan A = 1/2>, then find <math == [sin A (cos C + cos A)] / [cos C (sin C - sin A)]> = ?>
+          <Options>
+            <A = 1>
+            <B = 2>
+            <C = 3>
+            <D = 5>
+          </Options>
+          <answer = C>
+          <explanation = Using cos C = sin A and sin C = cos A with tan A = 1/2 (oppo = 1, adj = 2, hypo = √5), the ratio simplifies to (1 + 2)/(2 - 1) = 3.>
+        </Qn>
+        <Qn>
+          <id == QA-TRG-BS-FR-18>
+          <mid = TRG.C1>
+          <step id = T3>
+          <type = Quantitative Aptitude>
+          <text = 17) In <math == tri ABC>, <math == ang B = 90 deg> and <math == AB : BC = 1 : 2>. What is the value of <math == cos A + tan C> ?>
+          <Options>
+            <A = (2 + √5) / (2√5)>
+            <B = (1 + √5) / (2√5)>
+            <C = 3 / √5>
+            <D = √5 / 2>
+          </Options>
+          <answer = A>
+          <explanation = AB = 1, BC = 2 => AC = √5. For A, cos A = 1/√5; for C, tan C = 1/2. Sum = 1/√5 + 1/2 = (2 + √5) / (2√5).>
+        </Qn>
+        <Qn>
+          <id == QA-TRG-BS-FR-19>
+          <mid = TRG.C1>
+          <step id = T3>
+          <type = Quantitative Aptitude>
+          <text = 18) If <math == sin A = 5/13> and <math == 7 cot B = 24>, find <math == (sec A cos B)(cosec B tan A)> = ?>
+          <Options>
+            <A = 65/42>
+            <B = 42/65>
+            <C = 13/14>
+            <D = 25/12>
+          </Options>
+          <answer = A>
+          <explanation = Using (5, 12, 13) for A and (7, 24, 25) for B: (sec A tan A)(cos B cosec B) = (13/12 × 5/12) × (24/7) = 65/42.>
+        </Qn>
+        <Qn>
+          <id == QA-TRG-BS-FR-20>
+          <mid = TRG.C1>
+          <step id = T3>
+          <type = Quantitative Aptitude>
+          <text = 19) If <math == sin 23 deg = a/b>, find <math == sec 23 deg - sin 67 deg> = ?>
+          <Options>
+            <A = a² / [b √(b² - a²)]>
+            <B = b² / [a √(b² - a²)]>
+            <C = a / √(b² - a²)>
+            <D = √(b² - a²) / b>
+          </Options>
+          <answer = A>
+          <explanation = sin 67° = cos 23° = √(b² - a²)/b and sec 23° = b/√(b² - a²). Their difference is a² / [b √(b² - a²)].>
+        </Qn>
+        <Qn>
+          <id == QA-TRG-BS-FR-21>
+          <mid = TRG.C1>
+          <step id = T3>
+          <type = Quantitative Aptitude>
+          <text = 20) If <math == sec 31 deg = x>, find <math == sin^2 59 deg + (1 / sec^2 31 deg) - [1 / (sin^2 59 deg cosec^2 59 deg)]> = ?>
+          <Options>
+            <A = (2 - x²) / x²>
+            <B = (x² - 2) / x²>
+            <C = 2 / x²>
+            <D = 1 / x²>
+          </Options>
+          <answer = A>
+          <explanation = sin 59° = cos 31° = 1/x. Thus 1/x² + 1/x² - 1 = (2 - x²) / x².>
+        </Qn>
+        <Qn>
+          <id == QA-TRG-BS-FR-22>
+          <mid = TRG.C1>
+          <step id = T1>
+          <type = Quantitative Aptitude>
+          <text = 21) If <math == tan B = 5/3>, find <math == (cosec B + sin B) / (cos B - sec B)> = ?>
+          <Options>
+            <A = -177 / 125>
+            <B = 177 / 125>
+            <C = -59 / 25>
+            <D = 59 / 125>
+          </Options>
+          <answer = A>
+          <explanation = tan B = 5/3 => oppo = 5, adj = 3, hypo = √34. Substituting ratios gives -177 / 125.>
+        </Qn>
+        <Qn>
+          <id == QA-TRG-BS-FR-23>
+          <mid = TRG.C1>
+          <step id = T2>
+          <type = Quantitative Aptitude>
+          <text = 22) If <math == cos theta = 12/13>, find <math == [sin theta (1 - tan theta)] / [tan theta (1 + cosec theta)]> = ?>
+          <Options>
+            <A = 35 / 234>
+            <B = 25 / 234>
+            <C = 35 / 156>
+            <D = 7 / 18>
+          </Options>
+          <answer = A>
+          <explanation = By the (5, 12, 13) triplet, sin θ = 5/13, tan θ = 5/12, cosec θ = 13/5. Substituting directly gives 35 / 234.>
+        </Qn>
+      </qn all>
+    </box>
+  </Concept>
+</Subtopic>
+</mid>
