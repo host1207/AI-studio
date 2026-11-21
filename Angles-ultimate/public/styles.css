@@ -70,6 +70,7 @@ h1 em, h2 em { font-family: Georgia, serif; font-weight: 400; letter-spacing: -.
 .chapter-meta { display: flex; align-items: center; gap: 8px; color: var(--muted); font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: .07em; }
 .chapter-meta strong { color: var(--ink); font-size: 13px; font-weight: 500; }
 .empty-state { max-width: 520px; padding: 60px 24px; margin: 35px auto; text-align: center; border: 1px dashed var(--line); }
+.is-hidden { display: none !important; }
 .empty-state.is-hidden { display: none; }
 .empty-glyph { color: var(--cobalt); font-size: 34px; }
 .empty-state h2 { margin: 12px 0 8px; font-size: 25px; letter-spacing: -.04em; }

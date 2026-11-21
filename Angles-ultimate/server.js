@@ -369,12 +369,34 @@ async function appendQuestionToBank(folder, targetFile, targetPath, questionBloc
 }
 async function atomicWriteBatch(changes) {
   const originals = new Map();
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  async function renameWithWindowsRetry(tempPath, targetPath, content) {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      try {
+        await fs.rename(tempPath, targetPath);
+        return;
+      } catch (err) {
+        if ((err?.code === 'EPERM' || err?.code === 'EBUSY' || err?.code === 'EACCES') && attempt < 3) {
+          await sleep(40 * (attempt + 1));
+          continue;
+        }
+        if (err?.code === 'EPERM' || err?.code === 'EBUSY' || err?.code === 'EXDEV') {
+          await fs.writeFile(targetPath, content, 'utf8');
+          try { await fs.unlink(tempPath); } catch (_) {}
+          return;
+        }
+        throw err;
+      }
+    }
+  }
   try {
     for (const [file, content] of changes) {
       let original;
       try { original = await fs.readFile(file, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; original = null; }
       originals.set(file, original);
-      const temp = `${file}.angles-tmp`; await fs.writeFile(temp, content, 'utf8'); await fs.rename(temp, file);
+      const temp = `${file}.angles-tmp`;
+      await fs.writeFile(temp, content, 'utf8');
+      await renameWithWindowsRetry(temp, file, content);
     }
   } catch (error) {
     for (const [file, content] of originals) { try { if (content === null) await fs.unlink(file); else await fs.writeFile(file, content, 'utf8'); } catch (_) {} }
@@ -1396,8 +1418,11 @@ app.use(express.static(PUBLIC_DIR, {
     }
   }
 }));
-app.get(/^(?!\/api(?:\/|$)|\/manus-routes\.json$).*/, (_req, res) => {
-  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+app.get(/^(?!\/api(?:\/|$)|\/manus-routes\.json$).*/, (req, res) => {
+  if (/\.(?:js|mjs|cjs|css|map|json|svg|png|jpe?g|gif|webp|ico|woff2?|ttf|eot)$/i.test(req.path)) {
+    return res.status(404).type('text/plain').send(`Not found: ${req.path}`);
+  }
+  return res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
     .set('Pragma', 'no-cache')
     .set('Expires', '0')
     .sendFile(path.join(PUBLIC_DIR, 'index.html'));

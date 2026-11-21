@@ -26,7 +26,7 @@ function sha256File(filePath: string): string {
 function computeSrcHash(srcDir: string): string {
   const hash = crypto.createHash('sha256');
   for (const file of collectSourceFiles(srcDir)) {
-    hash.update(path.relative(srcDir, file));
+    hash.update(path.relative(srcDir, file).split(path.sep).join('/'));
     hash.update('\0');
     hash.update(fs.readFileSync(file));
     hash.update('\0');
@@ -41,6 +41,9 @@ const srcDir = path.resolve(process.cwd(), 'src');
 
 const currentSrcHash = computeSrcHash(srcDir);
 const currentBundleHash = sha256File(bundlePath);
+const hasDevRuntime = fs.existsSync(bundlePath)
+  ? fs.readFileSync(bundlePath, 'utf8').includes('jsxDEV')
+  : false;
 let stamp: { srcHash?: string; bundleHash?: string } = {};
 try {
   if (fs.existsSync(stampPath)) stamp = JSON.parse(fs.readFileSync(stampPath, 'utf8'));
@@ -50,6 +53,7 @@ try {
 
 const needsRebuild =
   !currentBundleHash ||
+  hasDevRuntime ||
   !fs.existsSync(cssBundlePath) ||
   stamp.srcHash !== currentSrcHash ||
   stamp.bundleHash !== currentBundleHash;

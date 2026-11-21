@@ -11,6 +11,23 @@ async function api(url, options = {}) {
   return body;
 }
 function showToast(message) { const toast = $('#toast'); toast.textContent = message; toast.classList.add('is-visible'); clearTimeout(showToast.timer); showToast.timer = setTimeout(() => toast.classList.remove('is-visible'), 2400); }
+function renderTrackerBundleFallback(reason) {
+  const root = $('#tracker-root');
+  if (!root || window.__ANGLES_TRACKER_MOUNTED__) return;
+  const detail = escapeHtml(reason || window.__ANGLES_TRACKER_ERROR__ || 'The Pages 08-10 bundle (/tracker-suite.js) did not finish loading.');
+  root.innerHTML = `<div style="max-width:740px;margin:28px auto;padding:24px;background:#fff;border:1px solid #fecaca;border-radius:10px;color:#171817;font-family:var(--sans)">
+    <div style="font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:.08em;color:#dc2626;margin-bottom:8px">PAGES 08–10 BUNDLE NOT LOADED</div>
+    <h2 style="margin:0 0 8px;font-size:21px;letter-spacing:-.02em">Tracker, Exam Info &amp; Registry could not start</h2>
+    <p style="margin:0 0 12px;font-size:13px;color:#57534e;line-height:1.6">${detail}</p>
+    <p style="margin:0 0 16px;font-size:12px;color:#57534e;line-height:1.6">On Windows, close the terminal window and re-run <code>Angles-ultimate\\start-windows.bat</code> (it now verifies and builds <code>public\\tracker-suite.js</code> automatically), or run <code>npm run build:tracker</code> in the repo root and refresh.</p>
+    <button type="button" class="button button-primary" onclick="window.location.reload()">Retry / Reload</button>
+  </div>`;
+}
+window.__anglesTrackerLoadFailed = (reason) => {
+  window.__ANGLES_TRACKER_ERROR__ = reason || 'Failed to load /tracker-suite.js';
+  renderTrackerBundleFallback(window.__ANGLES_TRACKER_ERROR__);
+};
+
 function setPage(page) {
   const previousPage = state.page;
   if (previousPage === 'coding' && page !== 'coding' && state.isDirty) void flushSave();
@@ -28,6 +45,11 @@ function setPage(page) {
   if (page === 'tracker' && window.openTrackerSection && !state._openingScopedCards) window.openTrackerSection('part-1');
   if (page === 'exam-info' && window.openTrackerSection) window.openTrackerSection('exam-page-1');
   if (page === 'registry' && window.openTrackerSection) window.openTrackerSection('registry');
+  if (routeTarget === 'tracker' && !window.__ANGLES_TRACKER_MOUNTED__) {
+    setTimeout(() => {
+      if (!window.__ANGLES_TRACKER_MOUNTED__) renderTrackerBundleFallback(window.__ANGLES_TRACKER_ERROR__);
+    }, 350);
+  }
   window.history.replaceState({}, '', page === 'folders' ? '/' : `/#${page}`);
 }
 

@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && NODE_ENV=production vite build --config vite.tracker.config.ts --mode production",
+    "build": "vite build && vite build --config vite.tracker.config.ts --mode production",
+    "build:tracker": "vite build --config vite.tracker.config.ts --mode production",
     "start": "node server.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",

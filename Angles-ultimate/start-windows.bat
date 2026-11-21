@@ -18,10 +18,25 @@ if errorlevel 1 (
 )
 
 if not exist "node_modules\express\package.json" (
-  echo Installing the app dependencies from package-lock.json...
+  echo Installing Angles server dependencies...
   call npm.cmd ci --ignore-scripts --no-audit --no-fund
   if errorlevel 1 (
+    call npm.cmd install --ignore-scripts --no-audit --no-fund
+  )
+  if errorlevel 1 (
     echo ERROR: Dependency installation failed. Check your internet connection and try again.
+    pause
+    exit /b 1
+  )
+)
+
+if exist "scripts\ensure-tracker-bundle.js" (
+  echo Verifying Pages 08-10 ^(Tracker / Exam Info / Registry^) bundle...
+  node scripts\ensure-tracker-bundle.js
+  if errorlevel 1 (
+    echo.
+    echo ERROR: Could not verify or build Pages 08-10 ^(public\tracker-suite.js^).
+    echo Make sure you cloned the entire repository ^(not just Angles-ultimate^) and have internet on first build.
     pause
     exit /b 1
   )
