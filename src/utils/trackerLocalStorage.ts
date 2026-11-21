@@ -2,9 +2,6 @@ import type { ChapterLedger } from '../components/TrackerPageOne';
 import type {
   DomainItem,
   ChapterItem,
-  SubtopicItem,
-  ConceptItem,
-  MicroConceptItem,
   ExamProfile,
 } from '../components/ExamRegistryDashboard';
 import type { ExplanationStepItem } from './mkmlStorageScanner';
@@ -15,15 +12,14 @@ export const NOTE_DRAFTS_STORAGE_KEY = 'angles_note_drafts_v1';
 export const STORAGE_ENABLED_KEY = 'angles_local_storage_enabled_v1';
 
 export interface PersistedTrackerState {
-  version: 1;
+  version: 4;
   savedAt: string;
   activeChapterKey: string;
   ledgers: Record<string, ChapterLedger>;
   domains: DomainItem[];
   chapters: ChapterItem[];
-  subtopics: SubtopicItem[];
-  concepts: ConceptItem[];
-  microConcepts: MicroConceptItem[];
+  /** Legacy field preserved for backward compatibility (permanent Full Base IDs are now used directly) */
+  stepIdOverrides: Record<string, string>;
   stepsByQid: Record<string, ExplanationStepItem[]>;
   testSessions: TestSessionRecord[];
   activeTestSessionId: string;
@@ -57,9 +53,52 @@ export function loadPersistedTrackerState(
   try {
     const raw = window.localStorage.getItem(TRACKER_STORAGE_KEY);
     if (!raw) return { ...defaults, restoredFromLocal: false, savedAt: null };
-    const parsed = JSON.parse(raw) as Partial<PersistedTrackerState>;
+    const parsed = JSON.parse(raw) as Omit<Partial<PersistedTrackerState>, 'version'> & { version?: number };
     if (!parsed || typeof parsed !== 'object') {
       return { ...defaults, restoredFromLocal: false, savedAt: null };
+    }
+
+    // Migrate legacy v1 placeholder-seeded state cleanly to v3:
+    // keep any recorded Trigonometry attempts and valid TRG step overrides,
+    // while clearing legacy placeholder domains (GI/GS), chapters (TD/PL/ALG/...), mock ledgers, and stale plain-text steps.
+    if (parsed.version !== 2 && parsed.version !== 3 && parsed.version !== 4) {
+      const migratedLedgers: Record<string, ChapterLedger> = { ...defaults.ledgers };
+      if (parsed.ledgers?.TRG && parsed.ledgers.TRG.concepts && migratedLedgers.TRG) {
+        const mergedConcepts: Record<string, Record<string, ChapterLedger['concepts'][string][string]>> = {};
+        for (const [cMid, qMap] of Object.entries(migratedLedgers.TRG.concepts)) {
+          mergedConcepts[cMid] = { ...qMap };
+        }
+        for (const [cMid, qMap] of Object.entries(parsed.ledgers.TRG.concepts)) {
+          mergedConcepts[cMid] = { ...(mergedConcepts[cMid] || {}), ...qMap };
+        }
+        migratedLedgers.TRG = {
+          ...migratedLedgers.TRG,
+          ...parsed.ledgers.TRG,
+          timing: parsed.ledgers.TRG.timing || migratedLedgers.TRG.timing,
+          concepts: mergedConcepts,
+        };
+      }
+      const migratedOverrides: Record<string, string> = {};
+      if (parsed.stepIdOverrides && typeof parsed.stepIdOverrides === 'object') {
+        for (const [baseId, shortCode] of Object.entries(parsed.stepIdOverrides)) {
+          if (
+            typeof baseId === 'string' &&
+            typeof shortCode === 'string' &&
+            baseId.toUpperCase().startsWith('QA-TRG-') &&
+            shortCode.trim()
+          ) {
+            migratedOverrides[baseId.trim()] = shortCode.trim().toUpperCase();
+          }
+        }
+      }
+      return {
+        ...defaults,
+        ledgers: migratedLedgers,
+        stepIdOverrides: migratedOverrides,
+        stepsByQid: {},
+        restoredFromLocal: true,
+        savedAt: typeof parsed.savedAt === 'string' ? parsed.savedAt : null,
+      };
     }
 
     // Smart merge ledgers so newly added code chapters are never lost while user attempts win
@@ -100,19 +139,27 @@ export function loadPersistedTrackerState(
         ? parsed.selectedExamId
         : exams[0]?.id || defaults.selectedExamId;
 
+    // Subtopics, Concepts, and Micro Concepts are intentionally NEVER restored from localStorage —
+    // they are absorbed live from disk chapter files using registered Domains & Chapters.
+    const cleanOverrides: Record<string, string> = {};
+    if (parsed.stepIdOverrides && typeof parsed.stepIdOverrides === 'object') {
+      for (const [baseId, shortCode] of Object.entries(parsed.stepIdOverrides)) {
+        if (typeof baseId === 'string' && typeof shortCode === 'string' && baseId.trim() && shortCode.trim()) {
+          cleanOverrides[baseId.trim()] = shortCode.trim().toUpperCase();
+        }
+      }
+    }
+
     return {
       activeChapterKey,
       ledgers: mergedLedgers,
       domains: Array.isArray(parsed.domains) && parsed.domains.length > 0 ? parsed.domains : defaults.domains,
       chapters: Array.isArray(parsed.chapters) && parsed.chapters.length > 0 ? parsed.chapters : defaults.chapters,
-      subtopics: Array.isArray(parsed.subtopics) && parsed.subtopics.length > 0 ? parsed.subtopics : defaults.subtopics,
-      concepts: Array.isArray(parsed.concepts) && parsed.concepts.length > 0 ? parsed.concepts : defaults.concepts,
-      microConcepts:
-        Array.isArray(parsed.microConcepts) && parsed.microConcepts.length > 0
-          ? parsed.microConcepts
-          : defaults.microConcepts,
+      stepIdOverrides: {},
+      // Reset cached stepsByQid when upgrading from v2/v3 -> v4 so permanent Full Base IDs
+      // from chapter questions.html render cleanly without stale T1/T2 overrides.
       stepsByQid:
-        parsed.stepsByQid && typeof parsed.stepsByQid === 'object'
+        parsed.version === 4 && parsed.stepsByQid && typeof parsed.stepsByQid === 'object'
           ? { ...defaults.stepsByQid, ...parsed.stepsByQid }
           : defaults.stepsByQid,
       testSessions:
@@ -137,13 +184,103 @@ export function savePersistedTrackerState(
   try {
     const savedAt = new Date().toISOString();
     const payload: PersistedTrackerState = {
-      version: 1,
+      version: 4,
       savedAt,
       ...state,
     };
     window.localStorage.setItem(TRACKER_STORAGE_KEY, JSON.stringify(payload));
-    window.dispatchEvent(new CustomEvent('angles:storage-updated', { detail: { savedAt } }));
+    window.dispatchEvent(
+      new CustomEvent('angles:storage-updated', { detail: { savedAt, source: 'tracker' } })
+    );
     return savedAt;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveDiskTrackerState(
+  state: Omit<PersistedTrackerState, 'version' | 'savedAt'>,
+  savedAt?: string | null,
+  keepalive = false
+): Promise<boolean> {
+  try {
+    const payload: PersistedTrackerState = {
+      version: 4,
+      savedAt: savedAt || new Date().toISOString(),
+      ...state,
+    };
+    const res = await fetch('/api/state', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ state: payload }),
+      keepalive,
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function loadDiskTrackerState(
+  defaults: Omit<PersistedTrackerState, 'version' | 'savedAt'>
+): Promise<(Omit<PersistedTrackerState, 'version' | 'savedAt'> & { savedAt: string | null }) | null> {
+  try {
+    const res = await fetch('/api/state', { cache: 'no-store' });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { ok?: boolean; exists?: boolean; state?: Partial<PersistedTrackerState> };
+    if (!data?.exists || !data.state || typeof data.state !== 'object') return null;
+    const parsed = data.state;
+    const mergedLedgers: Record<string, ChapterLedger> = { ...defaults.ledgers };
+    if (parsed.ledgers && typeof parsed.ledgers === 'object') {
+      for (const [code, savedLedger] of Object.entries(parsed.ledgers)) {
+        if (!savedLedger || !savedLedger.concepts) continue;
+        const defaultLedger = mergedLedgers[code];
+        if (!defaultLedger) {
+          mergedLedgers[code] = savedLedger;
+        } else {
+          const mergedConcepts: Record<string, Record<string, ChapterLedger['concepts'][string][string]>> = {};
+          for (const [cMid, qMap] of Object.entries(defaultLedger.concepts)) {
+            mergedConcepts[cMid] = { ...qMap };
+          }
+          for (const [cMid, qMap] of Object.entries(savedLedger.concepts)) {
+            mergedConcepts[cMid] = { ...(mergedConcepts[cMid] || {}), ...qMap };
+          }
+          mergedLedgers[code] = {
+            ...defaultLedger,
+            ...savedLedger,
+            timing: savedLedger.timing || defaultLedger.timing,
+            concepts: mergedConcepts,
+          };
+        }
+      }
+    }
+    const exams =
+      Array.isArray(parsed.exams) && parsed.exams.length > 0 ? parsed.exams : defaults.exams;
+    return {
+      activeChapterKey:
+        parsed.activeChapterKey && mergedLedgers[parsed.activeChapterKey]
+          ? parsed.activeChapterKey
+          : defaults.activeChapterKey,
+      ledgers: mergedLedgers,
+      domains: Array.isArray(parsed.domains) && parsed.domains.length > 0 ? parsed.domains : defaults.domains,
+      chapters: Array.isArray(parsed.chapters) && parsed.chapters.length > 0 ? parsed.chapters : defaults.chapters,
+      stepIdOverrides: {},
+      stepsByQid:
+        parsed.stepsByQid && typeof parsed.stepsByQid === 'object'
+          ? { ...defaults.stepsByQid, ...parsed.stepsByQid }
+          : defaults.stepsByQid,
+      testSessions:
+        Array.isArray(parsed.testSessions) && parsed.testSessions.length > 0
+          ? parsed.testSessions
+          : defaults.testSessions,
+      activeTestSessionId: parsed.activeTestSessionId || defaults.activeTestSessionId,
+      exams,
+      selectedExamId:
+        parsed.selectedExamId && exams.some((e) => e.id === parsed.selectedExamId)
+          ? parsed.selectedExamId
+          : exams[0]?.id || defaults.selectedExamId,
+      savedAt: typeof parsed.savedAt === 'string' ? parsed.savedAt : null,
+    };
   } catch {
     return null;
   }

@@ -58,6 +58,7 @@ interface Props {
   concepts: ConceptItem[];
   microConcepts: MicroConceptItem[];
   stepsByQid: Record<string, ExplanationStepItem[]>;
+  liveChapterMkml?: string;
 }
 
 function fmt(n: number, decimals = 2): string {
@@ -79,6 +80,7 @@ export const TrackerPageTwo: React.FC<Props> = ({
   concepts,
   microConcepts,
   stepsByQid,
+  liveChapterMkml,
 }) => {
   // Custom editable MKML override per chapter so users can test adding <Subtopic == ...> & <Concept == ...> tags live
   const [customMkmlByChapter, setCustomMkmlByChapter] = useState<Record<string, string>>({});
@@ -98,7 +100,7 @@ export const TrackerPageTwo: React.FC<Props> = ({
         subtopics,
         concepts,
         microConcepts,
-        customMkmlByChapter[ledger.chapterCode]
+        customMkmlByChapter[ledger.chapterCode] || liveChapterMkml
       ),
     [
       ledger,
@@ -108,6 +110,7 @@ export const TrackerPageTwo: React.FC<Props> = ({
       concepts,
       microConcepts,
       customMkmlByChapter,
+      liveChapterMkml,
     ]
   );
 
@@ -294,6 +297,7 @@ export const TrackerPageTwo: React.FC<Props> = ({
 
   const rawChapterMkml =
     customMkmlByChapter[ledger.chapterCode] ||
+    liveChapterMkml ||
     CHAPTER_MKML_STORAGE[ledger.chapterCode] ||
     `<Domain == ${scannedTree.domainCode}>\n<Chapter == ${scannedTree.chapterId}>\n<!-- Add <Subtopic == ...> and <Concept == ...> tags here -->`;
 
@@ -1064,7 +1068,7 @@ export const TrackerPageTwo: React.FC<Props> = ({
             <div className="flex items-center gap-2 text-xs font-bold uppercase text-[#111827]">
               <span className="w-2 h-2 rounded-full bg-[#1D4ED8]" />
               <span>
-                MICRO CONCEPT / STEP-ID (T1, T2, T3) ACCURACY &amp; WEAKNESS DIAGNOSTIC
+                MICRO CONCEPT / STEP-ID (BASE IDs, TG, Tu) ACCURACY &amp; WEAKNESS DIAGNOSTIC
               </span>
               <span className="px-2 py-0.5 text-[10px] bg-[#EFF6FF] text-[#1D4ED8] border border-[#BFDBFE] rounded font-bold">
                 UNIQUE ID → STEP-ID ROLLUP

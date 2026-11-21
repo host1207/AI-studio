@@ -39,6 +39,7 @@ interface Props {
   subtopics: SubtopicItem[];
   concepts: ConceptItem[];
   microConcepts: MicroConceptItem[];
+  liveChapterMkml?: string;
 }
 
 function getLatestAttemptSummary(
@@ -114,6 +115,7 @@ export const TrackerQuestionIndex: React.FC<Props> = ({
   subtopics,
   concepts,
   microConcepts,
+  liveChapterMkml,
 }) => {
   // Scan the chapter's MKML storage and marks.tex ledger
   const scannedTree = useMemo(
@@ -125,9 +127,10 @@ export const TrackerQuestionIndex: React.FC<Props> = ({
         chapters,
         subtopics,
         concepts,
-        microConcepts
+        microConcepts,
+        liveChapterMkml
       ),
-    [ledger, domains, chapters, subtopics, concepts, microConcepts]
+    [ledger, domains, chapters, subtopics, concepts, microConcepts, liveChapterMkml]
   );
 
   // All concept IDs in this chapter

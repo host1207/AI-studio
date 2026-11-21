@@ -91,11 +91,17 @@ window.refreshTracker = async (preferredFolder?: string) => {
     const upper = preferredFolder.toUpperCase();
     const code = upper.includes('TRIG')
       ? 'TRG'
-      : upper.includes('PRONOUN')
+      : upper.includes('PRONOUN NEW')
         ? 'PN'
-        : upper.includes('TIME')
-          ? 'TD'
-          : undefined;
+        : upper.includes('PHRASES')
+          ? 'PC'
+          : upper.includes('TENSES')
+            ? 'TE'
+            : upper.includes('SUBJECT')
+              ? 'SVA'
+              : upper.includes('VERB')
+                ? 'VB'
+                : undefined;
     if (code) {
       window.dispatchEvent(
         new CustomEvent('angles:tracker-command', {

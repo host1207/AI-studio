@@ -169,10 +169,60 @@ const nestedGeometry = MKML.compile('<box points=(1,1),(5,1),(5,5),(1,5)>Parent<
 assert.equal((nestedGeometry.match(/class="mkml-flow-box"/g) || []).length, 2);
 assert.equal((nestedGeometry.match(/<polyline\b/g) || []).length, 1);
 
+const steppedExplanationQuiz = MKML.compile(`<qn all>
+  <Qn>
+    <text = Find <math == sin A> when <math == tan A = 4/3>.>
+    <Options>
+      <A = 4/5>
+      <B = 3/5>
+    </Options>
+    <answer = A>
+    <explanation>
+      <step 1 - T1>
+        Draw right triangle for <math == tan A = 4/3>:
+        <box points=(1,1),(6,1),(6,6),(1,6) background-color=#FFFFFF color=#CBD5E1></box>
+        <line d line-color=#2563EB text-color=#1D4ED8>(2,5),(2,2) O = 4</line d>
+        <line d line-color=#059669 text-color=#047857>(2,5),(5,5) A = 3</line d>
+        <box w points=(2,1),(5,1),(5,2),(2,2) text-color=#0F172A>Right Tri</box w>
+        <rule == Match <ud = opp>4</ud> and <ok = 3> vs <x = 5>>
+        <table r = 1 c = 2><c11 = Side><c12 = Value></table>
+      </step 1>
+      <Step 2 -T2, TG>
+        Triplet <chain == 3 -> 4 -> 5> gives <hide == hypo = 5>, so <math == sin A = 4/5>.
+      </step 2>
+    </explanation>
+  </Qn>
+</qn all>`);
+assert.match(steppedExplanationQuiz, /class="mkml-exp-steps"/);
+assert.equal((steppedExplanationQuiz.match(/class="mkml-exp-step"/g) || []).length, 2);
+assert.match(steppedExplanationQuiz, /data-step-num="1" data-step-ids="T1"/);
+assert.match(steppedExplanationQuiz, /data-step-num="2" data-step-ids="T2,TG"/);
+assert.match(steppedExplanationQuiz, /class="mkml-exp-step-id is-tg" data-step-id="TG"/);
+assert.match(steppedExplanationQuiz, /class="mkml-question-diagram-window"/);
+assert.match(steppedExplanationQuiz, /class="mkml-line-d-label"/);
+assert.match(steppedExplanationQuiz, /class="mkml-question-graph-box mkml-flow-box-w"/);
+assert.match(steppedExplanationQuiz, /class="mkml-callout mkml-rule"/);
+assert.match(steppedExplanationQuiz, /class="angle-table" data-rows="1" data-cols="2"/);
+assert.match(steppedExplanationQuiz, /class="angles-ud-label">opp<\/span>/);
+assert.match(steppedExplanationQuiz, /class="mkml-chain-step"/);
+assert.match(steppedExplanationQuiz, /class="mkml-spoiler"/);
+assert.doesNotMatch(steppedExplanationQuiz, /class="mkml-flow-lines-m"/, 'Step diagrams must stay inside the step and never leak onto the outer canvas.');
+
+const namedHierarchy = MKML.compile(`<Subtopic == QA-TnD-RL, name = Relative Speed>
+  <Concept == QA-TnD-RL-SPD, name = Speed>
+    <MC == QA-TnD-RL-SPD-MC1, name = Direct Ratio>Body</MC>
+    <box points=(1,1),(5,1),(5,5),(1,5)>Card</box>
+  </Concept>
+</Subtopic>`);
+assert.match(namedHierarchy, /data-subtopic="QA-TnD-RL" data-name="Relative Speed"/);
+assert.match(namedHierarchy, /data-concept="QA-TnD-RL-SPD" data-name="Speed"/);
+assert.match(namedHierarchy, /data-mc="QA-TnD-RL-SPD-MC1" data-name="Direct Ratio"/);
+assert.match(namedHierarchy, /data-concept-mid="QA-TnD-RL-SPD"/);
+
 const legacy = MKML.compile('<qn all mode = fast><Qn><text = Legacy question><A Legacy A><answer = a></Qn></qn all>');
 assert.match(legacy, /data-mode="normal"/);
 assert.match(legacy, /Legacy A/);
-console.log('MKML parser tests passed: math, tables, quizzes, study tags, CSS linking, flowchart lines/boxes, responsive grid rows, and legacy aliases.');
+console.log('MKML parser tests passed: math, tables, quizzes, study tags, CSS linking, flowchart lines/boxes, stepped explanations, named hierarchy tags, responsive grid rows, and legacy aliases.');
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -230,7 +280,7 @@ assert.match(studio,/Math\.max\(requiredRows, htmlRows, flowRows\)/);
 assert.match(studio,/Math\.max\(requiredCols, htmlCols, flowCols, 25\)/);
 assert.match(studio,/querySelectorAll\('\.mkml-flow-lines, \.mkml-flow-lines-m'\)/);
 assert.match(studio,/function fitFlowBoxes\(\)/);
-assert.match(studio,/function prepareDiagramQuestionThumbnails\(root\)/);
+assert.match(studio,/function prepareDiagramQuestionThumbnails\(root/);
 assert.match(studio,/function openDiagramQuestionPage\(index\)/);
 assert.match(studio,/function returnToDiagram\(\)/);
 assert.match(studio,/preview-flow-lines-m-layer/);
@@ -261,4 +311,76 @@ assert.match(appCss,/\.mkml-flow-box \{[^}]*display: grid;[^}]*pointer-events: a
 assert.match(appCss,/\.mkml-flow-box-content \{[^}]*width: max-content/);
 assert.match(appCss,/\.mkml-flow-box-shape \{[^}]*clip-path|\.mkml-flow-box-shape/);
 assert.match(appCss,/\.mkml-flow-box-content \.angle-table \{ width: max-content; \}/);
-console.log('Offline KaTeX bundle and app script-order checks passed.');
+
+// New syntax tests: <line d floating = ±Xmm>, <arc> / <arc m>, <box path = ...>, <target == ...>
+const floatingLineHtml = MKML.compile('<line d line-color = #2563EB text-color = #1D4ED8 floating = 0.5mm>(2,5),(8,5) Base 4</line d><line d floating = -3mm>(2,5),(2,1) Height 3</line d>');
+assert.match(floatingLineHtml, /mkml-line-d-label/);
+assert.match(floatingLineHtml, /translateY\(calc\(-50% - 0\.5mm\)\)/);
+assert.match(floatingLineHtml, /translateY\(calc\(50% \+ 3mm\)\)/);
+
+const arcHtml = MKML.compile('<arc points = (2,6) (8,6) depth = 1.5 color = #D97706 text-color = #B45309 floating = 2mm>θ</arc><arc m points = (3,8),(9,8) depth = -1 color = #2563EB>α</arc m>');
+assert.match(arcHtml, /mkml-arc-path/);
+assert.match(arcHtml, /<path class="mkml-arc-path" d="M /);
+assert.match(arcHtml, /mkml-arc-label/);
+assert.match(arcHtml, /mkml-flow-lines-m/);
+assert.match(arcHtml, /θ/);
+assert.match(arcHtml, /α/);
+
+const expArcAndFloat = MKML.compileExplanation('Diagram:<box points = (1,1),(5,1),(5,5),(1,5)></box><line d floating = 1.2mm>(2,4),(4,4) A</line d><arc m points = (3.4,4),(3.6,3.5) depth = 0.4 color = #D97706>θ</arc m>');
+assert.match(expArcAndFloat, /mkml-question-diagram-window/);
+assert.match(expArcAndFloat, /mkml-arc-path/);
+assert.match(expArcAndFloat, /translateY\(calc\(-50% - 1\.2mm\)\)/);
+
+const pathBoxHtml = MKML.compile('<box points = (13,41),(29,41),(29,46),(13,46) path = QA-TRG-BS-FR background-color = #EFF6FF color = #1E40AF></box>');
+assert.match(pathBoxHtml, /data-question-path="QA-TRG-BS-FR"/);
+assert.match(pathBoxHtml, /has-question-path/);
+assert.match(pathBoxHtml, /mkml-qn-path-host/);
+assert.match(studio, /isPortalBox/);
+assert.match(appCss, /\.mkml-flow-box\.has-question-path/);
+
+const targetedQnHtml = MKML.compile('<qn all><Qn><id == QA-TRG-BS-FR-1><target == QA-TRG-BS-FR><text = Test><Options><A = 1><B = 2></Options><answer = A><explanation><step 1 - QA-TRG-BS-FR-MC1>Step</step 1></explanation></Qn></qn all>');
+assert.match(targetedQnHtml, /data-target="QA-TRG-BS-FR"/);
+assert.match(targetedQnHtml, /QA-TRG-BS-FR-MC1/);
+
+// <enclave> step viewport tests (normal box + strict 1-per-step rule + shorthand)
+const enclaveStepHtml = MKML.compile(`<qn all><Qn><text = Enclave test><Options><A = 1><B = 2></Options><answer = A><explanation>
+  <step 1 - QA-TRG-BS-FR-1>
+    <enclave points = (1,1),(13,1),(13,6),(1,6) background-color = #FFFFFF color = #CBD5E1></enclave>
+    <line color = #94A3B8>(2,5),(5,2)</line>
+    <line d line-color = #2563EB text-color = #1D4ED8 floating = 1mm>(2,5),(2,2) O = 4</line d>
+    <arc m points = (4.2,5),(4.5,4.2) depth = 0.35 color = #D97706 text-color = #B45309 floating = 1mm>θ</arc m>
+    <box w points = (6,2),(12,2),(12,5),(6,5) text-color = #0F172A>Step note</box w>
+  </step 1>
+  <step 2 - QA-TRG-BS-FR-2>
+    <enclave = (2,2),(8,6)>
+    <line d line-color = #059669>(3,5),(7,5) Base</line d>
+  </step 2>
+  <step 3 - QA-TRG-BS-FR-3>
+    <enclave points = (1,1),(5,1),(5,4),(1,4) background-color = #FFFFFF color = #CBD5E1>First</enclave>
+    <enclave points = (6,1),(10,1),(10,4),(6,4) background-color = #FFFFFF color = #CBD5E1>Second</enclave>
+  </step 3>
+</explanation></Qn></qn all>`);
+assert.match(enclaveStepHtml, /class="mkml-question-diagram-window is-enclave" data-enclave="true"[^>]*style="width:768px;height:160px/);
+assert.match(enclaveStepHtml, /class="mkml-question-graph-box mkml-enclave-frame"/);
+assert.match(enclaveStepHtml, /mkml-arc-path/);
+assert.match(enclaveStepHtml, /mkml-box-w-text/);
+assert.match(enclaveStepHtml, /width:384px;height:128px/);
+assert.match(enclaveStepHtml, /only one &lt;enclave&gt; is allowed per step; extra enclaves were skipped/);
+
+// Legacy + New Chapter Folder button must be removed; Enclave toolbar button must exist
+assert.doesNotMatch(page, /id="new-chapter-button"/);
+assert.match(page, /data-insert="enclave"/);
+assert.doesNotMatch(studio, /async function createChapter\(/);
+
+// <box w> must NOT render an underline SVG line
+assert.doesNotMatch(enclaveStepHtml, /mkml-box-w-line/);
+assert.doesNotMatch(MKML.compile('<box w points=(1,1),(5,1),(5,3),(1,3)>Clean</box w>'), /mkml-box-w-line/);
+
+// 05 Shortcuts has full custom MKML syntax reference; 04 Graph remains unchanged
+assert.match(page, /05 — MKML SYNTAX/);
+assert.match(page, /&lt;enclave\b/);
+assert.match(page, /id="graph-page"[^>]*data-route="graph"/);
+
+console.log('Offline KaTeX bundle, app script-order, <arc>, floating <line d>, <box path>, <box w> clean text, <enclave>, and Shortcuts checks passed.');
+
+

@@ -2,7 +2,16 @@ const express = require('express');
 const fs = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
-const { normalizeMid, parseMids, rootOf, conceptOf, parseQuestionBlocks, normalizeQuestionType, normalizeQuestionText, uniqueQuestionsByText, scanConcepts, validateQuestion, calculateChapterReadiness, gapsByFrequency } = require('./question-engine');
+const {
+  parseQuestionBlocks,
+  normalizeQuestionType,
+  normalizeQuestionText,
+  uniqueQuestionsByText,
+  scanHierarchyBlocks,
+  validateQuestion,
+  calculateStepCoverage,
+  tuGapsByFrequency
+} = require('./question-engine');
 const TrackerEngine = require('./public/tracker-engine');
 
 const app = express();
@@ -46,150 +55,317 @@ function cleanFileName(name, type = 'html') {
 }
 
 function escapeRegExp(value) { return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
-function folderRoot(content) { return normalizeMid(/<!--\s*angles-root-mid:\s*([\w.-]+)\s*-->/i.exec(content)?.[1] || ''); }
-async function rootMidInUse(mid, exceptFolder = '') {
-  for (const chapter of await scanChapters()) {
-    if (chapter.folder === exceptFolder) continue;
-    for (const file of chapter.files.filter((name) => name.toLowerCase().endsWith('.html'))) {
-      if (folderRoot(await fs.readFile(path.join(folderPath(chapter.folder), file), 'utf8')) === mid) return chapter.folder;
-    }
-  }
+function folderRoot(content) {
+  const chMatch = /<Chapter\s*==\s*([^,>]+)/i.exec(String(content || ''));
+  if (chMatch) return chMatch[1].trim().toUpperCase();
   return '';
 }
-function withRootMid(content, root) {
-  const marker = `<!-- angles-root-mid: ${normalizeMid(root)} -->`;
-  if (/<!--\s*angles-root-mid:/i.test(content)) return content.replace(/<!--\s*angles-root-mid:[\s\S]*?-->/i, marker);
-  return /<!doctype\b[^>]*>/i.test(content) ? content.replace(/<!doctype\b[^>]*>/i, (doctype) => `${doctype}\n${marker}`) : `${marker}\n${content}`;
-}
-function wrapConceptFile(content, conceptMid) {
-  const local = conceptOf(conceptMid);
-  if (!local || !/^(?:C\d+|UN)$/.test(local)) return { content, found: false };
-  const pattern = new RegExp(`<mid\\s*=\\s*${escapeRegExp(local)}\\s*>([\\s\\S]*?)<\\/mid\\s*>`, 'i');
-  const match = pattern.exec(content);
-  if (!match) return { content, found: false };
-  const existing = match[1];
-  const qn = /<qn\s+all\b([\s\S]*?)<\/qn\s+all\s*>/i.exec(existing);
-  const questionBlocks = [];
-  return { found: true, content, insert(block) {
-    const blockQuestions = parseQuestionBlocks(existing);
-    if (blockQuestions.some((q) => normalizeQuestionText(q.text) === normalizeQuestionText(parseQuestionBlocks(block)[0]?.text))) return { content, duplicate: true };
-    let nextBody;
-    if (qn) {
-      const qnStart = match.index + match[0].indexOf(qn[0]);
-      const close = qnStart + qn[0].lastIndexOf('</qn');
-      nextBody = content.slice(0, close) + `\n${block}\n` + content.slice(close);
-    } else {
-      const insertAt = match.index + match[0].length - '</mid>'.length;
-      nextBody = content.slice(0, insertAt) + `\n<qn all>\n${block}\n</qn all>\n` + content.slice(insertAt);
-    }
-    return { content: nextBody, duplicate: false };
-  } };
-}
-async function locateConcept(folder, targetMid) {
-  const dir = folderPath(folder); const entries = await fs.readdir(dir, { withFileTypes: true });
-  for (const entry of entries.filter((item) => item.isFile() && item.name.toLowerCase().endsWith('.html'))) {
-    const content = await fs.readFile(path.join(dir, entry.name), 'utf8');
-    if (scanConcepts(content).some((concept) => concept.localMid === conceptOf(targetMid))) return { folder, file: entry.name, content };
-  }
-  return null;
-}
+
+const SKIP_INDEX_FOLDERS = new Set(['global unmapped', 'prototype', 'basics', 'basic', 'pronoun']);
+
+/**
+ * Builds the live Step-ID + Tu PYQ Coverage Index directly from disk chapter files
+ * using permanent Full Base IDs (<Domain>-<Chapter>-<Subtopic>-<Concept>-<MC#>) + TG + Tu.
+ * Zero MID dependency, zero unstable Tn numbering.
+ */
 async function indexQuestionData() {
-  const chapters = await scanChapters(); const registry = {}; const results = [];
+  const chapters = await scanChapters();
+  const microConceptRegistry = [];
+  const mcByBaseId = new Map();
+  const conceptRegistry = new Map(); // UPPER(conceptId) -> { conceptId, title, folder, file, chapterId }
+  const chapterByCode = new Map(); // UPPER(chapterId) -> { folder, name, chapterId, domainId }
+
+  // Pass 1: Absorb all <Chapter>, <Concept>, and <MC == FullBaseId, name = ...>
+  const chapterFileContents = [];
   for (const chapter of chapters) {
-    const files = chapter.files.filter((name) => name.toLowerCase().endsWith('.html'));
-    let root = '';
-    for (const file of files) { const content = await fs.readFile(path.join(folderPath(chapter.folder), file), 'utf8'); root = root || folderRoot(content); }
-    const row = { folder: chapter.folder, name: chapter.name, rootMid: root, concepts: [], questions: [], unmapped: [] };
-    for (const file of files) {
+    if (SKIP_INDEX_FOLDERS.has(chapter.folder.toLowerCase())) continue;
+    const htmlFiles = chapter.files
+      .filter((name) => name.toLowerCase().endsWith('.html'))
+      .sort((a, b) => a.localeCompare(b));
+    const files = [];
+    let chapterId = '';
+    let domainId = '';
+    for (const file of htmlFiles) {
       const content = await fs.readFile(path.join(folderPath(chapter.folder), file), 'utf8');
-      for (const concept of scanConcepts(content)) {
-        const mid = concept.localMid === 'UN' ? `${root || 'UN'}.UN` : `${root}.${concept.localMid}`;
-        const entry = { mid, title: concept.title || mid, folder: chapter.folder, file, content: concept.body };
-        if (root) registry[mid] = { folder: chapter.folder, file, conceptTitle: entry.title };
-        const parsed = parseQuestionBlocks(concept.body).map((question) => ({ ...question, folder: chapter.folder, file, conceptMid: mid }));
-        const midUnmapped = parsed.filter((question) => question.mids.some((questionMid) => rootOf(questionMid) === 'UN' || conceptOf(questionMid) === 'UN'));
-        const mappedByMid = parsed.filter((question) => !midUnmapped.includes(question));
-        if (concept.localMid === 'UN') row.unmapped.push(...parsed);
-        else { row.unmapped.push(...midUnmapped); row.questions.push(...mappedByMid); }
-        row.concepts.push({ mid, title: entry.title, folder: chapter.folder, file, questions: parsed.length, questionTypes: parsed.map((question) => question.type || 'UNTYPED') });
+      files.push({ file, content });
+      const hierarchy = scanHierarchyBlocks(content);
+      if (!domainId && hierarchy.domain?.id) domainId = hierarchy.domain.id;
+      if (!chapterId && hierarchy.chapter?.id) chapterId = hierarchy.chapter.id;
+      for (const con of hierarchy.concepts) {
+        const cKey = con.conceptId.toUpperCase();
+        if (cKey && !conceptRegistry.has(cKey)) {
+          conceptRegistry.set(cKey, {
+            conceptId: con.conceptId,
+            title: con.title || con.conceptId,
+            folder: chapter.folder,
+            file,
+            chapterId: hierarchy.chapter?.id || chapterId || chapter.folder
+          });
+        }
+      }
+      for (const mc of hierarchy.microConcepts) {
+        const key = mc.baseId.toUpperCase();
+        if (!key || mcByBaseId.has(key)) continue;
+        const entry = {
+          baseId: mc.baseId,
+          shortId: mc.baseId,
+          name: mc.name || mc.baseId,
+          folder: chapter.folder,
+          file,
+          chapterId: hierarchy.chapter?.id || chapterId || chapter.folder,
+          conceptId: mc.baseId.split('-').slice(0, 4).join('-')
+        };
+        mcByBaseId.set(key, entry);
+        microConceptRegistry.push(entry);
       }
     }
-    const visited = new Set(); const countedTexts = new Set(); let mappedUnique = 0; const typeCounts = {};
-    for (const concept of row.concepts.filter((item) => !item.mid.endsWith('.UN'))) {
-      for (const question of row.questions.filter((item) => item.conceptMid === concept.mid)) {
-        const tagged = question.mids.filter((mid) => rootOf(mid) === root);
-        if (!tagged.includes(concept.mid)) continue;
-        if (tagged.some((mid) => visited.has(mid))) continue;
-        const textKey = normalizeQuestionText(question.text);
-        if (!textKey || countedTexts.has(textKey)) continue;
-        countedTexts.add(textKey);
-        mappedUnique++;
-        const type = normalizeQuestionType(question.type) || 'UNTYPED';
-        typeCounts[type] = (typeCounts[type] || 0) + 1;
+    const resolvedChId = chapterId || chapter.folder;
+    chapterByCode.set(resolvedChId.toUpperCase(), { folder: chapter.folder, name: chapter.name, chapterId: resolvedChId, domainId });
+    chapterFileContents.push({ chapter, files, chapterId: resolvedChId, domainId });
+  }
+
+  // Pass 2: Scan questions (from both study files and questions.html), concepts, and Step-ID / Tu coverage
+  const results = [];
+  const targetCounts = {};
+  for (const { chapter, files, chapterId, domainId } of chapterFileContents) {
+    const conceptsMap = new Map();
+    const allQuestions = [];
+    const stepCounts = {};
+
+    // Register concepts declared in this chapter
+    for (const { file, content } of files) {
+      const hierarchy = scanHierarchyBlocks(content);
+      for (const con of hierarchy.concepts) {
+        const key = con.conceptId.toUpperCase();
+        if (!conceptsMap.has(key)) {
+          conceptsMap.set(key, {
+            conceptId: con.conceptId,
+            title: con.title || con.conceptId,
+            folder: chapter.folder,
+            file,
+            questions: []
+          });
+        }
       }
-      visited.add(concept.mid);
+      const parsedInFile = parseQuestionBlocks(content).map((q) => {
+        const enclosing = hierarchy.concepts
+          .filter((con) => q.start >= con.start && q.start < con.end)
+          .sort((a, b) => (a.end - a.start) - (b.end - b.start))[0];
+        const targetConcept = q.target || (enclosing ? enclosing.conceptId : '') || q.inferredTarget || '';
+        return {
+          ...q,
+          targetConcept,
+          folder: chapter.folder,
+          file
+        };
+      });
+      allQuestions.push(...parsedInFile);
     }
-    row.unmapped = uniqueQuestionsByText(row.unmapped);
-    row.mappedUnique = mappedUnique; row.unmappedCount = row.unmapped.length;
-    for (const question of row.unmapped) {
-      const type = normalizeQuestionType(question.type) || 'UNTYPED';
-      typeCounts[type] = (typeCounts[type] || 0) + 1;
-    }
-    row.typeCounts = typeCounts;
-    row.uniqueQuestionCount = Object.values(typeCounts).reduce((sum, count) => sum + count, 0);
-    row.concepts.forEach((concept) => {
-      const questions = uniqueQuestionsByText(concept.mid.endsWith('.UN') ? row.unmapped.filter((question) => question.conceptMid === concept.mid) : row.questions.filter((question) => question.conceptMid === concept.mid));
-      concept.typeCounts = {};
-      questions.forEach((question) => { const type = normalizeQuestionType(question.type) || 'UNTYPED'; concept.typeCounts[type] = (concept.typeCounts[type] || 0) + 1; });
-      concept.uniqueQuestionCount = questions.length;
+
+    const uniqueQuestions = uniqueQuestionsByText(allQuestions);
+
+    // Group questions into their target concept bucket (works identically for questions.html and inline <Concept>)
+    uniqueQuestions.forEach((q) => {
+      const targetKey = String(q.targetConcept || '').trim();
+      if (targetKey) {
+        const upperTarget = targetKey.toUpperCase();
+        targetCounts[upperTarget] = (targetCounts[upperTarget] || 0) + 1;
+        if (!conceptsMap.has(upperTarget)) {
+          conceptsMap.set(upperTarget, {
+            conceptId: targetKey,
+            title: targetKey,
+            folder: chapter.folder,
+            file: q.file,
+            questions: []
+          });
+        }
+        conceptsMap.get(upperTarget).questions.push(q);
+      }
     });
-    row.totalQuestions = mappedUnique + row.unmappedCount;
-    row.readiness = calculateChapterReadiness(mappedUnique, row.unmappedCount);
-    row.gaps = gapsByFrequency(row.unmapped);
-    results.push(row);
+
+    const concepts = [...conceptsMap.values()].map((con) => {
+      const conQuestions = uniqueQuestionsByText(con.questions);
+      const conTu = conQuestions.filter((q) => q.hasTu).length;
+      const conTypeCounts = {};
+      conQuestions.forEach((q) => {
+        const t = normalizeQuestionType(q.type) || 'UNTYPED';
+        conTypeCounts[t] = (conTypeCounts[t] || 0) + 1;
+      });
+      return {
+        conceptId: con.conceptId,
+        title: con.title || con.conceptId,
+        folder: con.folder,
+        file: con.file,
+        questions: conQuestions.length,
+        tuCount: conTu,
+        coveredCount: conQuestions.length - conTu,
+        typeCounts: conTypeCounts,
+        uniqueQuestionCount: conQuestions.length
+      };
+    });
+
+    const tuQuestions = uniqueQuestions.filter((q) => q.hasTu);
+    const coveredQuestions = uniqueQuestions.filter((q) => q.steps.length > 0 && !q.hasTu);
+    const untaggedQuestions = uniqueQuestions.filter((q) => q.steps.length === 0);
+    const typeCounts = {};
+
+    uniqueQuestions.forEach((q) => {
+      const t = normalizeQuestionType(q.type) || 'UNTYPED';
+      typeCounts[t] = (typeCounts[t] || 0) + 1;
+      const seenInQ = new Set();
+      q.steps.forEach((step) => {
+        step.stepIds.forEach((rawToken) => {
+          const upper = rawToken.toUpperCase();
+          const resolved =
+            upper === 'TU'
+              ? { baseId: 'Tu', name: 'Unmapped Step (Missing MC)', isTu: true, isTg: false }
+              : upper === 'TG'
+                ? { baseId: 'TG', name: 'Global General Knowledge', isTu: false, isTg: true }
+                : (() => {
+                    const mc = mcByBaseId.get(upper);
+                    return mc
+                      ? { baseId: mc.baseId, name: mc.name, isTu: false, isTg: false }
+                      : { baseId: rawToken, name: 'Unregistered Step ID', isTu: false, isTg: false };
+                  })();
+          const key = resolved.baseId;
+          if (!stepCounts[key]) {
+            stepCounts[key] = {
+              stepId: resolved.baseId,
+              baseId: resolved.baseId,
+              name: resolved.name,
+              stepCount: 0,
+              questionCount: 0,
+              isTu: resolved.isTu,
+              isTg: resolved.isTg
+            };
+          }
+          stepCounts[key].stepCount++;
+          seenInQ.add(key);
+        });
+      });
+      seenInQ.forEach((key) => { stepCounts[key].questionCount++; });
+    });
+
+    const uncoveredCount = tuQuestions.length + untaggedQuestions.length;
+    const totalQuestions = uniqueQuestions.length;
+
+    results.push({
+      folder: chapter.folder,
+      name: chapter.name,
+      domainId: domainId || '',
+      chapterId: chapterId || chapter.folder,
+      concepts,
+      stepCounts: Object.values(stepCounts).sort((a, b) => b.questionCount - a.questionCount || a.baseId.localeCompare(b.baseId, undefined, { numeric: true })),
+      totalQuestions,
+      coveredCount: coveredQuestions.length,
+      tuCount: tuQuestions.length,
+      untaggedCount: untaggedQuestions.length,
+      coverage: calculateStepCoverage(coveredQuestions.length, uncoveredCount),
+      gaps: tuGapsByFrequency(tuQuestions),
+      typeCounts,
+      uniqueQuestionCount: totalQuestions
+    });
   }
-  const globalUnmappedRow = results.find((row) => row.rootMid === 'UN' || row.folder.toLowerCase() === 'global unmapped');
-  const chapterRows = results.filter((row) => row.rootMid && row.rootMid !== 'UN');
-  const total = chapterRows.reduce((sum, row) => sum + row.totalQuestions, 0);
-  results.forEach((row) => { row.totalShare = total ? row.totalQuestions / total * 100 : 0; });
+
+  const totalAcrossChapters = results.reduce((sum, row) => sum + row.totalQuestions, 0);
+  results.forEach((row) => {
+    row.totalShare = totalAcrossChapters ? (row.totalQuestions / totalAcrossChapters) * 100 : 0;
+  });
+
   const typeSet = new Set();
-  results.forEach((row) => Object.keys(row.typeCounts || {}).forEach((type) => typeSet.add(type)));
-  const types = [...typeSet].sort((a, b) => a === 'UNTYPED' ? 1 : b === 'UNTYPED' ? -1 : a.localeCompare(b));
-  const typeFolders = results.filter((row) => row.rootMid && row.rootMid !== 'UN').map((row) => ({ folder: row.folder, name: row.name, rootMid: row.rootMid, counts: row.typeCounts, uniqueCount: row.uniqueQuestionCount, concepts: row.concepts.map((concept) => ({ mid: concept.mid, title: concept.title, counts: concept.typeCounts, uniqueCount: concept.uniqueQuestionCount })) }));
-  if (globalUnmappedRow) typeFolders.push({ folder: globalUnmappedRow.folder, name: globalUnmappedRow.name, rootMid: 'UN', counts: globalUnmappedRow.typeCounts, uniqueCount: globalUnmappedRow.unmappedCount, concepts: globalUnmappedRow.concepts.map((concept) => ({ mid: concept.mid, title: concept.title, counts: concept.typeCounts, uniqueCount: concept.uniqueQuestionCount })) });
-  return { chapters: results, registry, typeBreakdown: { types, folders: typeFolders } };
+  results.forEach((row) => Object.keys(row.typeCounts || {}).forEach((t) => typeSet.add(t)));
+  const types = [...typeSet].sort((a, b) => (a === 'UNTYPED' ? 1 : b === 'UNTYPED' ? -1 : a.localeCompare(b)));
+  const typeFolders = results.map((row) => ({
+    folder: row.folder,
+    name: row.name,
+    chapterId: row.chapterId,
+    counts: row.typeCounts,
+    uniqueCount: row.uniqueQuestionCount,
+    concepts: row.concepts.map((c) => ({
+      conceptId: c.conceptId,
+      title: c.title,
+      counts: c.typeCounts,
+      uniqueCount: c.uniqueQuestionCount
+    }))
+  }));
+
+  return {
+    chapters: results,
+    microConcepts: microConceptRegistry,
+    concepts: [...conceptRegistry.values()],
+    targetCounts,
+    typeBreakdown: { types, folders: typeFolders }
+  };
 }
-async function resolveTarget(mid) {
-  const { chapters } = await indexQuestionData(); const root = rootOf(mid); const chapter = chapters.find((item) => item.rootMid === root);
-  if (!chapter || root === 'UN') {
-    const global = chapters.find((item) => item.rootMid === 'UN' || item.folder.toLowerCase() === 'global unmapped');
-    return global ? { kind: 'unmapped', folder: global.folder, file: 'unmapped.html', conceptMid: 'UN.UN' } : { kind: 'missing-global', root };
+
+function resolveStepTokenMeta(token, microConcepts) {
+  const upper = String(token || '').trim().toUpperCase();
+  if (upper === 'TU') {
+    return { kind: 'tu', shortId: 'Tu', baseId: 'Tu', name: 'Unmapped Step (Missing MC)' };
   }
-  if (conceptOf(mid) === 'UN') return { kind: 'unmapped', folder: chapter.folder, file: 'unmapped.html', conceptMid: `${root}.UN` };
-  const match = await locateConcept(chapter.folder, mid);
-  return match ? { kind: 'mapped', folder: match.folder, file: match.file, conceptMid: mid } : { kind: 'unknown-concept', folder: chapter.folder, file: 'unmapped.html', conceptMid: `${root}.UN`, requestedMid: mid };
+  if (upper === 'TG') {
+    return { kind: 'tg', shortId: 'TG', baseId: 'TG', name: 'Global General Knowledge' };
+  }
+  const match = microConcepts.find((mc) => mc.baseId.toUpperCase() === upper);
+  if (match) {
+    return { kind: 'mc', shortId: match.baseId, baseId: match.baseId, name: match.name, folder: match.folder, file: match.file, conceptId: match.conceptId };
+  }
+  return { kind: 'unknown', shortId: token, baseId: token, name: 'Not found in MC Registry (use Full Base ID, TG, or Tu)' };
 }
-async function getOrCreateUnmapped(folder, root) {
-  const dir = folderPath(folder); await fs.mkdir(dir, { recursive: true });
-  const target = path.join(dir, 'unmapped.html');
-  try { return await fs.readFile(target, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  const content = `<!-- angles-root-mid: ${normalizeMid(root)} -->\n<h1>${root === 'UN' ? 'Global Unmapped' : `${root} Unmapped Questions`}</h1>\n<mid = un>\n  <h2>Unmapped Questions</h2>\n</mid>\n`;
-  await fs.writeFile(target, content, 'utf8'); return content;
+
+function ensureQuestionMetadata(block, questionId, targetPath) {
+  let out = String(block || '').trim();
+  if (targetPath && !/<target\s*={1,2}\s*[^>]+>/i.test(out)) {
+    out = out.replace(/<Qn\b[^>]*>/i, (open) => `${open}\n  <target == ${targetPath}>`);
+  }
+  if (questionId && !/<id\s*={1,2}\s*[^>]+>/i.test(out)) {
+    out = out.replace(/<Qn\b[^>]*>/i, (open) => `${open}\n  <id == ${questionId}>`);
+  }
+  return out;
 }
-async function ensureGlobalUnmapped() {
-  const dir = folderPath('Global Unmapped'); await fs.mkdir(dir, { recursive: true });
-  const file = path.join(dir, 'unmapped.html');
-  try { await fs.access(file); } catch (_) { await fs.writeFile(file, '<!-- angles-root-mid: UN -->\n<h1>Global Unmapped</h1>\n<mid = un>\n  <h2>Unmapped Questions</h2>\n</mid>\n', 'utf8'); }
+
+function nextSequentialQuestionId(existingQuestions, targetPath) {
+  const prefix = String(targetPath || 'QA-Q').trim();
+  const escaped = escapeRegExp(prefix);
+  const re = new RegExp(`^${escaped}-(\\d+)$`, 'i');
+  let maxNum = 0;
+  for (const q of existingQuestions || []) {
+    const m = re.exec(String(q.id || '').trim());
+    if (m) maxNum = Math.max(maxNum, Number(m[1]));
+  }
+  return `${prefix}-${maxNum + 1}`;
 }
-async function ensureRegisteredUnmappedFiles() {
-  for (const chapter of await scanChapters()) {
-    if (chapter.folder.toLowerCase() === 'global unmapped') continue;
-    let root = '';
-    for (const name of chapter.files.filter((file) => file.toLowerCase().endsWith('.html'))) {
-      root = root || folderRoot(await fs.readFile(path.join(folderPath(chapter.folder), name), 'utf8'));
+
+async function appendQuestionToBank(folder, targetFile, targetPath, questionBlock, questionText, existingContentCache) {
+  const dir = folderPath(folder);
+  await fs.mkdir(dir, { recursive: true });
+  const targetPathFull = path.join(dir, targetFile);
+  let content = existingContentCache.has(targetPathFull) ? existingContentCache.get(targetPathFull) : null;
+  if (content === null) {
+    try { content = await fs.readFile(targetPathFull, 'utf8'); }
+    catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+      const heading = targetFile === 'tu-gaps.html'
+        ? `${folder} — Unmapped Tu Step Gaps`
+        : `${folder} — Question Bank`;
+      content = `<h1>${escapeHtml(heading)}</h1>\n<qn all mode = normal>\n</qn all>\n`;
     }
-    if (root && root !== 'UN' && !chapter.files.some((file) => file.toLowerCase() === 'unmapped.html')) await getOrCreateUnmapped(chapter.folder, root);
   }
+  const existing = parseQuestionBlocks(content);
+  if (existing.some((q) => normalizeQuestionText(q.text) === normalizeQuestionText(questionText))) {
+    return { path: targetPathFull, content, duplicate: true, assignedId: '' };
+  }
+  const assignedId = nextSequentialQuestionId(existing, targetPath || folder.toUpperCase().replace(/\s+/g, '-'));
+  const enrichedBlock = ensureQuestionMetadata(questionBlock, assignedId, targetPath);
+  const qnClose = content.lastIndexOf('</qn all>');
+  let updated;
+  if (qnClose !== -1) {
+    updated = content.slice(0, qnClose) + `\n${enrichedBlock}\n` + content.slice(qnClose);
+  } else {
+    updated = content + `\n<qn all mode = normal>\n${enrichedBlock}\n</qn all>\n`;
+  }
+  existingContentCache.set(targetPathFull, updated);
+  return { path: targetPathFull, content: updated, duplicate: false, assignedId };
 }
 async function atomicWriteBatch(changes) {
   const originals = new Map();
@@ -267,14 +443,12 @@ async function collectTrackerQuestionPool(folder, rootMid, files) {
   for (const file of files.filter((name) => name.toLowerCase().endsWith('.html')).sort((a, b) => a.localeCompare(b))) {
     const raw = await fs.readFile(path.join(folderPath(folder), file), 'utf8');
     const source = stripHtmlCommentsPreservingOffsets(raw);
-    const wrappers = scanConcepts(source);
-    wrappers.forEach((wrapper) => conceptMids.add(wrapper.localMid));
+    const hierarchy = scanHierarchyBlocks(source);
+    hierarchy.concepts.forEach((con) => conceptMids.add(con.conceptId));
     for (const question of parseQuestionBlocks(source)) {
-      const enclosing = wrappers.filter((wrapper) => question.start >= wrapper.start && question.start < wrapper.end).sort((a, b) => (a.end - a.start) - (b.end - b.start))[0];
-      let conceptMid = TrackerEngine.selectConceptMid(question.mids, enclosing?.localMid, rootMid);
-      conceptMid = /^(?:C\d+|UN)$/i.test(conceptMid) ? conceptMid.toUpperCase() : 'UN';
+      const enclosing = hierarchy.concepts.filter((con) => question.start >= con.start && question.start < con.end).sort((a, b) => (a.end - a.start) - (b.end - b.start))[0];
+      const conceptMid = question.target || (enclosing ? enclosing.conceptId : '') || question.inferredTarget || 'C1';
       conceptMids.add(conceptMid);
-      if (conceptMid === 'UN' && !enclosing && !question.mids.some((mid) => rootOf(mid) === rootMid && conceptOf(mid) === 'UN')) warnings.push({ code: 'QUESTION_UNCLASSIFIED', file, message: 'Question has no matching concept MID; counted in the chapter UN pool.' });
       const signature = trackerQuestionSignature(question);
       if (seen.has(signature)) continue;
       seen.add(signature);
@@ -284,17 +458,16 @@ async function collectTrackerQuestionPool(folder, rootMid, files) {
         signature,
         sourceFile: file,
         type: question.type || 'UNTYPED',
-        stepId: question.stepId || '',
+        stepId: question.stepIds.join(', '),
         gap: question.gap || '',
         text: question.text || '',
         optionsMap: question.optionsMap || {},
         answer: question.answer || '',
-        explanation: question.explanation || '',
-        mids: question.mids || []
+        explanation: question.explanation || ''
       });
     }
   }
-  return { pool, conceptMids: [...conceptMids].sort((a, b) => a === 'UN' ? 1 : b === 'UN' ? -1 : a.localeCompare(b)), warnings };
+  return { pool, conceptMids: [...conceptMids].sort((a, b) => a.localeCompare(b)), warnings };
 }
 async function readOrSyncTracker(folder, rootMid, topic, lockHeld = false) {
   const sync = async () => {
@@ -354,29 +527,29 @@ function apiError(res, error, status = 400) { res.status(status).json({ error: e
 app.get('/api/chapters', async (_req, res) => { try { res.json({ chapters: await scanChapters() }); } catch (error) { apiError(res, error, 500); } });
 app.post('/api/chapters', async (req, res) => {
   try {
-    await ensureData(); const folder = cleanChapterName(req.body?.name); const target = folderPath(folder);
-    const rootMid = normalizeMid(req.body?.mid || '');
-    if (!/^[A-Z][A-Z0-9-]*$/.test(rootMid) || rootMid === 'UN') throw new Error('Enter a valid folder MID (letters, numbers, hyphens); UN is reserved.');
-    const duplicateRoot = await rootMidInUse(rootMid);
-    if (duplicateRoot) throw new Error(`Root MID ${rootMid} is already assigned to ${duplicateRoot}.`);
+    await ensureData();
+    const folder = cleanChapterName(req.body?.name);
+    const target = folderPath(folder);
     await fs.mkdir(target, { recursive: false });
     await fs.writeFile(path.join(target, 'styles.css'), ':root { --chapter-accent: #2457ff; }\n', 'utf8');
-    await fs.writeFile(path.join(target, 'unmapped.html'), `<!-- angles-root-mid: ${rootMid} -->\n<h1>${escapeHtml(rootMid)} Unmapped Questions</h1>\n<mid = un>\n  <h2>Unmapped Questions</h2>\n</mid>\n`, 'utf8');
-    await fs.writeFile(path.join(target, '01-start-here.html'), `<!-- angles-root-mid: ${rootMid} -->\n<h1>New chapter</h1>\n<p>Start shaping this sheet.</p>\n`, 'utf8');
+    await fs.writeFile(path.join(target, '01-start-here.html'), `<h1>${escapeHtml(folder)}</h1>\n<p>Start shaping this sheet.</p>\n`, 'utf8');
     res.status(201).json({ folder, chapter: (await scanChapters()).find((chapter) => chapter.folder === folder) });
   } catch (error) { apiError(res, error, error.code === 'EEXIST' ? 409 : 400); }
 });
-app.put('/api/chapters/:folder/mid', async (req, res) => {
+app.delete('/api/chapters/:folder', async (req, res) => {
   try {
-    const folder = req.params.folder; const rootMid = normalizeMid(req.body?.mid || '');
-    if (!/^[A-Z][A-Z0-9-]*$/.test(rootMid) || rootMid === 'UN') throw new Error('Enter a valid chapter MID other than reserved UN.');
-    const duplicateRoot = await rootMidInUse(rootMid, folder);
-    if (duplicateRoot) throw new Error(`Root MID ${rootMid} is already assigned to ${duplicateRoot}.`);
-    const dir = folderPath(folder);
-    const files = (await fs.readdir(dir, { withFileTypes: true })).filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.html'));
-    for (const entry of files) { const file = path.join(dir, entry.name); const content = withRootMid(await fs.readFile(file, 'utf8'), rootMid); await fs.writeFile(file, content, 'utf8'); }
-    await getOrCreateUnmapped(folder, rootMid);
-    res.json({ ok: true, folder, mid: rootMid });
+    const folder = String(req.params.folder || '').trim();
+    if (!folder || folder === '.' || folder === '..' || /[\\/]/.test(folder)) {
+      throw new Error('Invalid chapter folder name.');
+    }
+    if (folder.toLowerCase() === 'global unmapped') {
+      throw new Error('Global Unmapped is a reserved system folder and cannot be deleted.');
+    }
+    const target = folderPath(folder);
+    const stat = await fs.stat(target);
+    if (!stat.isDirectory()) throw new Error('Target is not a chapter folder.');
+    await fs.rm(target, { recursive: true, force: true });
+    res.json({ ok: true, deleted: folder });
   } catch (error) { apiError(res, error, error.code === 'ENOENT' ? 404 : 400); }
 });
 app.get('/api/chapters/:folder/files', async (req, res) => {
@@ -390,82 +563,343 @@ app.get('/api/chapters/:folder/files/:file', async (req, res) => { try { const t
 app.put('/api/chapters/:folder/files/:file', async (req, res) => { try { const target = filePath(req.params.folder, req.params.file); if (typeof req.body?.content !== 'string') throw new Error('File content must be a string'); await fs.writeFile(target, req.body.content, 'utf8'); res.json({ ok: true, folder: req.params.folder, file: req.params.file, savedAt: new Date().toISOString() }); } catch (error) { apiError(res, error, error.code === 'ENOENT' ? 404 : 400); } });
 app.post('/api/chapters/:folder/files', async (req, res) => { try { const file = cleanFileName(req.body?.name, req.body?.type); const target = path.join(folderPath(req.params.folder), file); ensureInsideData(target); await fs.writeFile(target, typeof req.body?.content === 'string' ? req.body.content : req.body?.type === 'css' ? '/* New chapter stylesheet */\n' : '<h1>New topic</h1>\n', { encoding: 'utf8', flag: 'wx' }); res.status(201).json({ file, type: file.endsWith('.css') ? 'css' : 'html', content: await fs.readFile(target, 'utf8') }); } catch (error) { apiError(res, error, error.code === 'EEXIST' ? 409 : error.code === 'ENOENT' ? 404 : 400); } });
 app.patch('/api/chapters/:folder/files/:file', async (req, res) => { try { const current = filePath(req.params.folder, req.params.file); const next = cleanFileName(req.body?.name, req.params.file.endsWith('.css') ? 'css' : 'html'); const target = path.join(folderPath(req.params.folder), next); ensureInsideData(target); await fs.rename(current, target); res.json({ ok: true, oldName: req.params.file, file: next }); } catch (error) { apiError(res, error, error.code === 'EEXIST' ? 409 : error.code === 'ENOENT' ? 404 : 400); } });
-app.delete('/api/chapters/:folder/files/:file', async (req, res) => { try { await fs.unlink(filePath(req.params.folder, req.params.file)); res.json({ ok: true, file: req.params.file }); } catch (error) { apiError(res, error, error.code === 'ENOENT' ? 404 : 400); } });
+app.delete('/api/chapters/:folder/files/:file', async (req, res) => {
+  try {
+    const folder = req.params.folder;
+    const file = req.params.file;
+    const target = filePath(folder, file);
+    const dir = folderPath(folder);
+
+    let removedQuestionIds = [];
+    let removedConceptIds = [];
+    let ledgerRemoved = false;
+
+    if (file.toLowerCase().endsWith('.html')) {
+      const deletedContent = await fs.readFile(target, 'utf8');
+      const deletedQuestions = parseQuestionBlocks(deletedContent);
+      const deletedHierarchy = scanHierarchyBlocks(deletedContent);
+      const deletedQidSet = new Set(deletedQuestions.map((q) => String(q.id || '').trim()).filter(Boolean));
+      const deletedConceptIdSet = new Set(deletedHierarchy.concepts.map((c) => c.conceptId.toUpperCase()));
+
+      await fs.unlink(target);
+
+      // Inspect remaining HTML files to find concepts that were uniquely defined in the deleted file
+      const remainingEntries = await fs.readdir(dir, { withFileTypes: true });
+      const remainingHtmlFiles = remainingEntries
+        .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.html'))
+        .map((e) => e.name);
+
+      const survivingConcepts = new Set();
+      for (const remFile of remainingHtmlFiles) {
+        const remContent = await fs.readFile(path.join(dir, remFile), 'utf8');
+        const remHierarchy = scanHierarchyBlocks(remContent);
+        remHierarchy.concepts.forEach((c) => survivingConcepts.add(c.conceptId.toUpperCase()));
+      }
+
+      const orphanedConcepts = new Set(
+        [...deletedConceptIdSet].filter((cid) => !survivingConcepts.has(cid))
+      );
+      removedConceptIds = [...orphanedConcepts];
+
+      // If the deleted file owned concepts not defined elsewhere, also purge ingested questions targeting them from questions.html
+      if (orphanedConcepts.size > 0 && remainingHtmlFiles.includes('questions.html')) {
+        const qBankPath = path.join(dir, 'questions.html');
+        let qBankContent = await fs.readFile(qBankPath, 'utf8');
+        const qBlocks = parseQuestionBlocks(qBankContent);
+        const blocksToRemove = qBlocks.filter((q) => {
+          const targetId = String(q.target || q.inferredTarget || '').trim().toUpperCase();
+          if (targetId && orphanedConcepts.has(targetId)) return true;
+          const qidUpper = String(q.id || '').trim().toUpperCase();
+          return [...orphanedConcepts].some((cid) => qidUpper.startsWith(`${cid}-`));
+        });
+
+        if (blocksToRemove.length > 0) {
+          // Remove matched blocks from bottom to top so indices remain valid
+          const sortedDesc = [...blocksToRemove].sort((a, b) => b.start - a.start);
+          for (const blk of sortedDesc) {
+            if (blk.id) deletedQidSet.add(String(blk.id).trim());
+            qBankContent = `${qBankContent.slice(0, blk.start).trimEnd()}\n${qBankContent.slice(blk.end).trimStart()}`;
+          }
+          await atomicWriteBatch(new Map([[qBankPath, `${qBankContent.trim()}\n`]]));
+        }
+      }
+
+      // Check how many questions still survive in the chapter folder
+      let survivingQuestionCount = 0;
+      for (const remFile of remainingHtmlFiles) {
+        const remContent = await fs.readFile(path.join(dir, remFile), 'utf8');
+        survivingQuestionCount += parseQuestionBlocks(remContent).length;
+      }
+
+      removedQuestionIds = [...deletedQidSet];
+
+      // Purge deleted questions & attempt history from tracker-ledger.json
+      const ledgerPath = path.join(dir, 'tracker-ledger.json');
+      try {
+        const ledgerRaw = await fs.readFile(ledgerPath, 'utf8');
+        const ledger = JSON.parse(ledgerRaw);
+        const removedUpper = new Set(removedQuestionIds.map((id) => id.toUpperCase()));
+
+        if (survivingQuestionCount === 0 || (file.toLowerCase() === 'questions.html' && survivingQuestionCount === 0)) {
+          await fs.unlink(ledgerPath);
+          ledgerRemoved = true;
+        } else if (removedUpper.size > 0 && ledger && typeof ledger === 'object') {
+          if (ledger.concepts && typeof ledger.concepts === 'object') {
+            for (const [cKey, qMap] of Object.entries(ledger.concepts)) {
+              if (!qMap || typeof qMap !== 'object') continue;
+              for (const qid of Object.keys(qMap)) {
+                if (removedUpper.has(qid.toUpperCase())) delete qMap[qid];
+              }
+              if (Object.keys(qMap).length === 0) delete ledger.concepts[cKey];
+            }
+          }
+          if (ledger.attemptLog && typeof ledger.attemptLog === 'object') {
+            for (const qid of Object.keys(ledger.attemptLog)) {
+              if (removedUpper.has(qid.toUpperCase())) delete ledger.attemptLog[qid];
+            }
+          }
+          if (ledger.questionMeta && typeof ledger.questionMeta === 'object') {
+            for (const qid of Object.keys(ledger.questionMeta)) {
+              if (removedUpper.has(qid.toUpperCase())) delete ledger.questionMeta[qid];
+            }
+          }
+          if (Array.isArray(ledger.testSessions)) {
+            ledger.testSessions = ledger.testSessions
+              .map((sess) => ({
+                ...sess,
+                entries: Array.isArray(sess.entries)
+                  ? sess.entries.filter((e) => !removedUpper.has(String(e.questionId || '').toUpperCase()))
+                  : []
+              }))
+              .filter((sess) => sess.entries.length > 0);
+          }
+          const remainingLedgerQs = Object.values(ledger.concepts || {}).reduce(
+            (sum, qMap) => sum + Object.keys(qMap || {}).length,
+            0
+          );
+          if (remainingLedgerQs === 0) {
+            await fs.unlink(ledgerPath);
+            ledgerRemoved = true;
+          } else {
+            ledger.lastUpdated = new Date().toISOString();
+            await atomicWriteBatch(new Map([[ledgerPath, `${JSON.stringify(ledger, null, 2)}\n`]]));
+          }
+        }
+      } catch (err) {
+        if (!err || err.code !== 'ENOENT') throw err;
+      }
+    } else {
+      await fs.unlink(target);
+    }
+
+    res.json({ ok: true, folder, file, removedQuestionIds, removedConceptIds, ledgerRemoved });
+  } catch (error) { apiError(res, error, error.code === 'ENOENT' ? 404 : 400); }
+});
+
+app.post('/api/chapters/:folder/rewrite-domain-prefix', async (req, res) => {
+  try {
+    const folder = req.params.folder;
+    const oldDomain = String(req.body?.oldDomainCode || req.body?.oldDomain || '').trim();
+    const newDomain = String(req.body?.newDomainCode || req.body?.newDomain || '').trim();
+    const chapterCode = String(req.body?.chapterCode || '').trim();
+    if (!oldDomain || !newDomain || !chapterCode) {
+      throw new Error('oldDomainCode, newDomainCode, and chapterCode are required.');
+    }
+    if (oldDomain.toUpperCase() === newDomain.toUpperCase()) {
+      return res.json({ ok: true, updatedFiles: [] });
+    }
+
+    const dir = folderPath(folder);
+    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+    const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const oldPrefix = `${oldDomain}-${chapterCode}`;
+    const newPrefix = `${newDomain}-${chapterCode}`;
+    const prefixRe = new RegExp(`\\b${escapeRegex(oldPrefix)}(?=[\\s>,\\-\\/"'\\)])`, 'gi');
+    const domainTagRe = new RegExp(`(<Domain\\s*==\\s*)${escapeRegex(oldDomain)}(?=\\s*[,>])`, 'gi');
+
+    const writes = new Map();
+    const updatedFiles = [];
+
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      if (!entry.name.toLowerCase().endsWith('.html') && entry.name !== 'tracker-ledger.json') continue;
+      const fullPath = path.join(dir, entry.name);
+      const original = await fs.readFile(fullPath, 'utf8');
+      const next = original
+        .replace(domainTagRe, `$1${newDomain}`)
+        .replace(prefixRe, newPrefix);
+      if (next !== original) {
+        writes.set(fullPath, next);
+        updatedFiles.push(entry.name);
+      }
+    }
+
+    if (writes.size > 0) await atomicWriteBatch(writes);
+    res.json({ ok: true, folder, updatedFiles });
+  } catch (error) { apiError(res, error, error.code === 'ENOENT' ? 404 : 400); }
+});
+app.get('/api/chapters/:folder/questions', async (req, res) => {
+  try {
+    const folder = req.params.folder;
+    const requestedPath = String(req.query.path || '').trim().toUpperCase();
+    const dir = folderPath(folder);
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    const htmlFiles = entries
+      .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.html'))
+      .map((entry) => entry.name)
+      .sort((a, b) => (a === 'questions.html' ? -1 : b === 'questions.html' ? 1 : a.localeCompare(b)));
+    const all = [];
+    for (const file of htmlFiles) {
+      const content = await fs.readFile(path.join(dir, file), 'utf8');
+      const hierarchy = scanHierarchyBlocks(content);
+      for (const q of parseQuestionBlocks(content)) {
+        const enclosing = hierarchy.concepts
+          .filter((con) => q.start >= con.start && q.start < con.end)
+          .sort((a, b) => (a.end - a.start) - (b.end - b.start))[0];
+        const targetConcept = q.target || (enclosing ? enclosing.conceptId : '') || q.inferredTarget || '';
+        all.push({ ...q, targetConcept, file });
+      }
+    }
+    const unique = uniqueQuestionsByText(all);
+    const filtered = requestedPath
+      ? unique.filter((q) => {
+          const tc = String(q.targetConcept || '').toUpperCase();
+          return tc === requestedPath || tc.startsWith(`${requestedPath}-`) || String(q.id || '').toUpperCase().startsWith(`${requestedPath}-`);
+        })
+      : unique;
+    res.set('Cache-Control', 'no-store').json({
+      folder,
+      path: requestedPath,
+      count: filtered.length,
+      questions: filtered.map((q) => ({
+        id: q.id,
+        target: q.targetConcept,
+        type: q.type,
+        text: q.text,
+        stepIds: q.stepIds,
+        hasTu: q.hasTu,
+        block: q.block,
+        file: q.file
+      }))
+    });
+  } catch (error) { apiError(res, error, error.code === 'ENOENT' ? 404 : 400); }
+});
 app.get('/api/question-index', async (_req, res) => { try { res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate').set('Pragma', 'no-cache').set('Expires', '0').json(await indexQuestionData()); } catch (error) { apiError(res, error, 500); } });
 app.post('/api/question-index/dry-run', async (req, res) => {
   try {
-    const source = String(req.body?.source || ''); const questions = parseQuestionBlocks(source);
+    const source = String(req.body?.source || '');
+    const questions = parseQuestionBlocks(source);
     if (!questions.length) throw new Error('No <Qn> question blocks were found.');
-    const routes = [];
-    for (const question of questions) {
-      const issues = validateQuestion(question); const targets = [];
-      for (const mid of question.mids) targets.push({ ...(await resolveTarget(mid)), requestedMid: mid });
-      const unique = [...new Map(targets.map((target) => [`${target.folder}/${target.file}/${target.conceptMid}`, target])).values()];
-      routes.push({ index: question.index, text: question.text, type: question.type, mids: question.mids, gap: question.gap, issues, targets: unique, duplicate: false });
-    }
-    res.json({ routes, valid: routes.every((route) => !route.issues.length), mapped: routes.filter((route) => route.targets.some((target) => target.kind === 'mapped')).length, unmapped: routes.filter((route) => route.targets.some((target) => target.kind !== 'mapped')).length });
+    const { microConcepts, concepts, chapters } = await indexQuestionData();
+    const resolveDestination = (question, resolvedSteps) => {
+      const explicitTarget = String(question.target || '').trim();
+      const primaryMc = resolvedSteps.flatMap((s) => s.tokens).find((t) => t.kind === 'mc');
+      const targetPath = explicitTarget || question.inferredTarget || primaryMc?.conceptId || '';
+      const matchedConcept = targetPath
+        ? concepts.find((c) => c.conceptId.toUpperCase() === targetPath.toUpperCase())
+        : null;
+      const targetChapterPrefix = targetPath ? targetPath.split('-').slice(0, 2).join('-').toUpperCase() : '';
+      const matchedChapter = targetChapterPrefix
+        ? chapters.find((ch) => ch.chapterId.toUpperCase() === targetChapterPrefix)
+        : null;
+      const folder = matchedConcept?.folder || matchedChapter?.folder || primaryMc?.folder || 'Trigonometry';
+      const file = question.hasTu && !explicitTarget && !matchedConcept && !primaryMc ? 'tu-gaps.html' : 'questions.html';
+      return {
+        kind: question.hasTu ? 'tu-gap' : 'covered',
+        folder,
+        file,
+        targetPath: targetPath || (matchedChapter ? matchedChapter.chapterId : ''),
+        label: `${folder}/${file}${targetPath ? ` (${targetPath})` : ''}`
+      };
+    };
+    const routes = questions.map((question) => {
+      const issues = validateQuestion(question);
+      const resolvedSteps = question.steps.map((step) => ({
+        stepNumber: step.stepNumber,
+        hasTu: step.hasTu,
+        tokens: step.stepIds.map((tok) => resolveStepTokenMeta(tok, microConcepts))
+      }));
+      const unknownTokens = resolvedSteps
+        .flatMap((s) => s.tokens)
+        .filter((t) => t.kind === 'unknown')
+        .map((t) => t.baseId);
+      if (unknownTokens.length) {
+        issues.push(`Unknown Step ID(s) not in MC Registry: ${[...new Set(unknownTokens)].join(', ')} (use Full Base ID like QA-TRG-BS-FR-MC1, TG, or Tu)`);
+      }
+      const target = resolveDestination(question, resolvedSteps);
+      return {
+        index: question.index,
+        id: question.id,
+        text: question.text,
+        type: question.type || 'UNTYPED',
+        stepIds: question.stepIds,
+        hasTu: question.hasTu,
+        isCovered: question.isCovered && !unknownTokens.length,
+        gap: question.gap,
+        resolvedSteps,
+        target,
+        issues
+      };
+    });
+    const covered = routes.filter((r) => !r.hasTu && r.stepIds.length > 0).length;
+    const tuCount = routes.filter((r) => r.hasTu).length;
+    res.json({
+      routes,
+      valid: routes.every((r) => !r.issues.length),
+      covered,
+      tuCount,
+      coveragePercent: routes.length ? (covered / routes.length) * 100 : null
+    });
   } catch (error) { apiError(res, error); }
 });
 app.post('/api/question-index/commit', async (req, res) => {
   try {
     const questions = parseQuestionBlocks(String(req.body?.source || ''));
     if (!questions.length) throw new Error('No <Qn> question blocks were found.');
-    const issues = questions.flatMap((question) => validateQuestion(question).map((message) => `Q${question.index}: ${message}`));
-    if (issues.length) return res.status(422).json({ error: 'Fix validation issues before committing.', issues });
-    if (req.body?.allowUnknown !== true) {
-      for (const question of questions) for (const mid of question.mids) {
-        const target = await resolveTarget(mid);
-        if (target.kind === 'unknown-concept') return res.status(409).json({ error: `Confirm routing missing concept ${target.requestedMid} to ${target.conceptMid} in the dry-run preview.` });
+    const { microConcepts, concepts, chapters } = await indexQuestionData();
+    const validationIssues = [];
+    for (const q of questions) {
+      const qIssues = validateQuestion(q);
+      const unknownTokens = q.stepIds
+        .map((tok) => resolveStepTokenMeta(tok, microConcepts))
+        .filter((t) => t.kind === 'unknown')
+        .map((t) => t.baseId);
+      if (unknownTokens.length) {
+        qIssues.push(`Unknown Step ID(s): ${[...new Set(unknownTokens)].join(', ')}`);
       }
+      qIssues.forEach((msg) => validationIssues.push(`Q${q.index}: ${msg}`));
     }
-    const changed = new Map(); const added = []; const duplicates = []; const warnings = [];
-    for (const question of questions) {
-      const targets = [];
-      for (const mid of question.mids) targets.push(await resolveTarget(mid));
-      const uniqueTargets = [...new Map(targets.map((target) => [`${target.folder}/${target.file}/${target.conceptMid}`, target])).values()];
-      for (const target of uniqueTargets) {
-        if (target.kind === 'missing-global') { warnings.push(`No Global Unmapped folder is configured for ${question.mids.join('/')}.`); continue; }
-        const file = path.join(folderPath(target.folder), target.file);
-        let content = changed.has(file) ? changed.get(file) : target.kind === 'unmapped' ? await getOrCreateUnmapped(target.folder, rootOf(target.conceptMid)) : await fs.readFile(file, 'utf8');
-        const wrapped = wrapConceptFile(content, target.conceptMid);
-        if (!wrapped.found) { warnings.push(`${target.conceptMid} has no matching wrapper in ${target.folder}/${target.file}.`); continue; }
-        const result = wrapped.insert(question.block);
-        if (result.duplicate) duplicates.push({ text: question.text, mid: target.conceptMid });
-        else { changed.set(file, result.content); added.push({ folder: target.folder, file: target.file, mid: target.conceptMid }); }
+    if (validationIssues.length) return res.status(422).json({ error: 'Fix validation issues before committing.', issues: validationIssues });
+    const targetFolderOverride = String(req.body?.folder || '').trim();
+    const changed = new Map();
+    const contentCache = new Map();
+    const added = [];
+    const duplicates = [];
+
+    for (const q of questions) {
+      const resolvedTokens = q.stepIds.map((tok) => resolveStepTokenMeta(tok, microConcepts));
+      const primaryMc = resolvedTokens.find((t) => t.kind === 'mc');
+      const explicitTarget = String(q.target || '').trim();
+      const targetPath = explicitTarget || q.inferredTarget || primaryMc?.conceptId || '';
+      const matchedConcept = targetPath
+        ? concepts.find((c) => c.conceptId.toUpperCase() === targetPath.toUpperCase())
+        : null;
+      const targetChapterPrefix = targetPath ? targetPath.split('-').slice(0, 2).join('-').toUpperCase() : '';
+      const matchedChapter = targetChapterPrefix
+        ? chapters.find((ch) => ch.chapterId.toUpperCase() === targetChapterPrefix)
+        : null;
+      const folder = targetFolderOverride || matchedConcept?.folder || matchedChapter?.folder || primaryMc?.folder || 'Trigonometry';
+      const file = q.hasTu && !explicitTarget && !matchedConcept && !primaryMc ? 'tu-gaps.html' : 'questions.html';
+      const result = await appendQuestionToBank(folder, file, targetPath, q.block, q.text, contentCache);
+      if (result.duplicate) {
+        duplicates.push({ text: q.text, folder, file, targetPath });
+      } else {
+        changed.set(result.path, result.content);
+        added.push({ folder, file, targetPath, id: result.assignedId, status: q.hasTu ? 'Tu-gap' : 'covered' });
       }
     }
     await atomicWriteBatch(changed);
-    res.json({ ok: true, added, duplicates, warnings, index: await indexQuestionData() });
-  } catch (error) { apiError(res, error, error.code === 'ENOENT' ? 404 : 400); }
-});
-app.post('/api/question-index/resync', async (_req, res) => {
-  try {
-    const { chapters } = await indexQuestionData(); const changes = new Map(); const moved = []; const conflicts = [];
-    for (const chapter of chapters.filter((row) => row.rootMid && row.rootMid !== 'UN')) {
-      const unmappedPath = path.join(folderPath(chapter.folder), 'unmapped.html'); let source;
-      try { source = await fs.readFile(unmappedPath, 'utf8'); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
-      let nextSource = source;
-      const questions = parseQuestionBlocks(source).filter((question) => question.mids.some((mid) => rootOf(mid) === chapter.rootMid && conceptOf(mid) !== 'UN'));
-      for (const question of questions) {
-        let allSafe = true; const destinations = [];
-        for (const mid of question.mids.filter((value) => rootOf(value) === chapter.rootMid && conceptOf(value) !== 'UN')) {
-          const dest = await locateConcept(chapter.folder, mid);
-          if (!dest) { allSafe = false; conflicts.push({ text: question.text, mid, reason: 'Concept wrapper not found' }); continue; }
-          const key = path.join(folderPath(dest.folder), dest.file); const content = changes.has(key) ? changes.get(key) : dest.content;
-          const wrapper = wrapConceptFile(content, mid);
-          if (!wrapper.found) { allSafe = false; conflicts.push({ text: question.text, mid, reason: 'Concept wrapper not found' }); continue; }
-          const result = wrapper.insert(question.block);
-          if (!result.duplicate) changes.set(key, result.content);
-          destinations.push(mid);
-        }
-        if (allSafe && destinations.length) {
-          nextSource = nextSource.replace(question.block, ''); moved.push({ text: question.text, mids: destinations });
-        }
-      }
-      if (nextSource !== source) changes.set(unmappedPath, nextSource);
-    }
-    await atomicWriteBatch(changes);
-    res.json({ ok: true, moved, conflicts, index: await indexQuestionData() });
+    res.json({ ok: true, added, duplicates, warnings: [], index: await indexQuestionData() });
   } catch (error) { apiError(res, error, error.code === 'ENOENT' ? 404 : 400); }
 });
 app.get('/api/tracker', async (_req, res) => {
@@ -597,7 +1031,375 @@ app.put('/api/tracker/:folder/question-meta', async (req, res) => {
     res.json({ ok: true, ...saved });
   } catch (error) { trackerApiError(res, error); }
 });
+app.get('/api/registry/files', async (_req, res) => {
+  try {
+    const chapters = await scanChapters();
+    const skipFolders = new Set(['global unmapped', 'prototype']);
+    const folders = [];
+    for (const chapter of chapters) {
+      if (skipFolders.has(chapter.folder.toLowerCase())) continue;
+      const htmlFiles = chapter.files
+        .filter((name) => name.toLowerCase().endsWith('.html'))
+        .sort((a, b) => a.localeCompare(b));
+      let rootMid = '';
+      const files = [];
+      for (const file of htmlFiles) {
+        const content = await fs.readFile(path.join(folderPath(chapter.folder), file), 'utf8');
+        if (!rootMid) rootMid = folderRoot(content);
+        files.push({ file, content });
+      }
+      folders.push({
+        folder: chapter.folder,
+        name: chapter.name,
+        rootMid,
+        files
+      });
+    }
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate').json({ folders });
+  } catch (error) { apiError(res, error, 500); }
+});
+
+const STUDIO_STATE_FILE = path.join(DATA_DIR, 'studio-state.json');
+
+app.get('/api/state', async (_req, res) => {
+  try {
+    await ensureData();
+    const raw = await fs.readFile(STUDIO_STATE_FILE, 'utf8');
+    const state = JSON.parse(raw);
+    res.set('Cache-Control', 'no-store').json({ ok: true, exists: true, state });
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      return res.set('Cache-Control', 'no-store').json({ ok: true, exists: false, state: null });
+    }
+    apiError(res, error, 500);
+  }
+});
+
+app.put('/api/state', async (req, res) => {
+  try {
+    await ensureData();
+    const state = req.body?.state;
+    if (!state || typeof state !== 'object') {
+      throw new Error('Request body must contain a valid state object.');
+    }
+    const payload = {
+      ...state,
+      savedAt: typeof state.savedAt === 'string' && state.savedAt ? state.savedAt : new Date().toISOString()
+    };
+    await atomicWriteBatch(new Map([[STUDIO_STATE_FILE, `${JSON.stringify(payload, null, 2)}\n`]]));
+    res.json({ ok: true, savedAt: payload.savedAt, file: 'data/studio-state.json' });
+  } catch (error) { apiError(res, error, 400); }
+});
+
+function buildAttemptLogFromConcepts(concepts = {}, existingLog = {}) {
+  const nextLog = {};
+  for (const questions of Object.values(concepts || {})) {
+    if (!questions || typeof questions !== 'object') continue;
+    for (const [qid, tuples] of Object.entries(questions)) {
+      if (!Array.isArray(tuples)) continue;
+      const priorEntries = Array.isArray(existingLog?.[qid]) ? existingLog[qid] : [];
+      nextLog[qid] = tuples.map((tuple, idx) => {
+        const [status, seconds, accMark, timeMark, option] = tuple;
+        const prior = priorEntries[idx];
+        return {
+          attempt: `A${idx + 1}`,
+          status,
+          seconds,
+          accMark,
+          timeMark,
+          option,
+          ...(prior?.recordedAt ? { recordedAt: prior.recordedAt } : {})
+        };
+      });
+    }
+  }
+  return nextLog;
+}
+
+app.get('/api/marks', async (_req, res) => {
+  try {
+    await ensureData();
+    const chapters = await scanChapters();
+    const skipFolders = new Set(['global unmapped', 'prototype']);
+    const ledgers = [];
+    for (const chapter of chapters) {
+      if (skipFolders.has(chapter.folder.toLowerCase())) continue;
+      const pathname = path.join(folderPath(chapter.folder), 'tracker-ledger.json');
+      try {
+        const raw = await fs.readFile(pathname, 'utf8');
+        const ledger = JSON.parse(raw);
+        if (ledger && typeof ledger === 'object') {
+          ledgers.push({
+            folder: chapter.folder,
+            file: `${chapter.folder}/tracker-ledger.json`,
+            chapterCode: String(ledger.chapterCode || ledger.chapterMid || '').trim().toUpperCase(),
+            ledger
+          });
+        }
+      } catch (err) {
+        if (!err || err.code !== 'ENOENT') continue;
+      }
+    }
+    res.set('Cache-Control', 'no-store').json({ ok: true, ledgers });
+  } catch (error) { apiError(res, error, 500); }
+});
+
+app.post('/api/marks/:folder/submit-test', async (req, res) => {
+  try {
+    await ensureData();
+    const folder = req.params.folder;
+    const dir = folderPath(folder);
+    await fs.mkdir(dir, { recursive: true });
+    const pathname = path.join(dir, 'tracker-ledger.json');
+
+    const chapterCode = String(req.body?.chapterCode || '').trim().toUpperCase() || folder.slice(0, 3).toUpperCase();
+    const chapterName = String(req.body?.chapterName || folder).trim();
+    const evaluations = Array.isArray(req.body?.evaluations) ? req.body.evaluations : [];
+    if (!evaluations.length) throw new Error('At least one evaluated question is required.');
+
+    const saved = await withTrackerLock(folder, async () => {
+      let ledger = null;
+      try {
+        const raw = await fs.readFile(pathname, 'utf8');
+        ledger = JSON.parse(raw);
+      } catch (err) {
+        if (!err || err.code !== 'ENOENT') throw err;
+      }
+
+      const incomingTiming = req.body?.timing || {};
+      const timingConfig = {
+        locked: true,
+        fastLimit: Number.isInteger(incomingTiming.fastLimit) && incomingTiming.fastLimit > 0 ? incomingTiming.fastLimit : (ledger?.timingConfig?.fastLimit || 45),
+        mediumLimit: Number.isInteger(incomingTiming.mediumLimit) && incomingTiming.mediumLimit > 0 ? incomingTiming.mediumLimit : (ledger?.timingConfig?.mediumLimit || 75),
+        slowLimit: Number.isInteger(incomingTiming.slowLimit) && incomingTiming.slowLimit > 0 ? incomingTiming.slowLimit : (ledger?.timingConfig?.slowLimit || 110)
+      };
+
+      if (!ledger || typeof ledger !== 'object') {
+        ledger = TrackerEngine.createLedger(chapterCode, chapterName);
+        ledger.chapterCode = chapterCode;
+        ledger.timingConfig = timingConfig;
+        if (req.body?.existingConcepts && typeof req.body.existingConcepts === 'object') {
+          ledger.concepts = JSON.parse(JSON.stringify(req.body.existingConcepts));
+        }
+      } else {
+        ledger.chapterMid = ledger.chapterMid || chapterCode;
+        ledger.chapterCode = chapterCode;
+        ledger.topic = chapterName;
+        ledger.timingConfig = timingConfig;
+        ledger.concepts = ledger.concepts && typeof ledger.concepts === 'object' ? ledger.concepts : {};
+      }
+
+      const nowIso = new Date().toISOString();
+      const existingLog = ledger.attemptLog && typeof ledger.attemptLog === 'object' ? ledger.attemptLog : {};
+      const appendedAttempts = [];
+
+      for (const ev of evaluations) {
+        const uniqueId = String(ev?.uniqueId || '').trim();
+        if (!uniqueId) continue;
+        const cleanStatus = ['C', 'W', 'S'].includes(ev?.status) ? ev.status : 'S';
+        const cleanSeconds = Math.max(1, Math.round(Number(ev?.seconds) || 1));
+        const cleanOption = cleanStatus === 'S'
+          ? '-'
+          : (/^[A-D]$/i.test(String(ev?.option || '')) ? String(ev.option).toUpperCase() : 'A');
+        const accMark = TrackerEngine.ACCURACY[cleanStatus];
+        const timeMark = TrackerEngine.expectedTimeMark(cleanStatus, cleanSeconds, timingConfig);
+
+        let targetConceptKey = '';
+        for (const [cKey, qMap] of Object.entries(ledger.concepts)) {
+          if (qMap && Object.prototype.hasOwnProperty.call(qMap, uniqueId)) {
+            targetConceptKey = cKey;
+            break;
+          }
+        }
+        if (!targetConceptKey) {
+          targetConceptKey = String(ev?.conceptKey || Object.keys(ledger.concepts)[0] || 'C1').trim() || 'C1';
+          if (!ledger.concepts[targetConceptKey]) ledger.concepts[targetConceptKey] = {};
+          if (!Array.isArray(ledger.concepts[targetConceptKey][uniqueId])) {
+            ledger.concepts[targetConceptKey][uniqueId] = [];
+          }
+        }
+
+        const tuple = [cleanStatus, cleanSeconds, accMark, timeMark, cleanOption];
+        ledger.concepts[targetConceptKey][uniqueId].push(tuple);
+        const attemptIndex = ledger.concepts[targetConceptKey][uniqueId].length;
+        const attemptLabel = `A${attemptIndex}`;
+
+        if (!Array.isArray(existingLog[uniqueId])) {
+          existingLog[uniqueId] = ledger.concepts[targetConceptKey][uniqueId].slice(0, -1).map((t, i) => ({
+            attempt: `A${i + 1}`,
+            status: t[0],
+            seconds: t[1],
+            accMark: t[2],
+            timeMark: t[3],
+            option: t[4]
+          }));
+        }
+        const entry = {
+          attempt: attemptLabel,
+          status: cleanStatus,
+          seconds: cleanSeconds,
+          accMark,
+          timeMark,
+          option: cleanOption,
+          recordedAt: nowIso
+        };
+        existingLog[uniqueId].push(entry);
+        appendedAttempts.push({ questionId: uniqueId, conceptKey: targetConceptKey, ...entry });
+      }
+
+      ledger.attemptLog = buildAttemptLogFromConcepts(ledger.concepts, existingLog);
+      ledger.testSessions = Array.isArray(ledger.testSessions) ? ledger.testSessions : [];
+      const sessionMeta = req.body?.testSession || {};
+      ledger.testSessions.push({
+        id: String(sessionMeta.id || `test-${Date.now()}`),
+        label: String(sessionMeta.label || `test id(${ledger.testSessions.length + 1})`),
+        recordedAt: nowIso,
+        entries: appendedAttempts
+      });
+      ledger.lastUpdated = nowIso;
+
+      await atomicWriteBatch(new Map([[pathname, `${JSON.stringify(ledger, null, 2)}\n`]]));
+      return { ledger, appendedAttempts };
+    });
+
+    res.json({
+      ok: true,
+      folder,
+      file: `${folder}/tracker-ledger.json`,
+      ...saved
+    });
+  } catch (error) { apiError(res, error, 400); }
+});
+
+app.put('/api/marks/:folder/sync', async (req, res) => {
+  try {
+    await ensureData();
+    const folder = req.params.folder;
+    const dir = folderPath(folder);
+    await fs.mkdir(dir, { recursive: true });
+    const pathname = path.join(dir, 'tracker-ledger.json');
+
+    const incoming = req.body?.ledger;
+    if (!incoming || typeof incoming !== 'object') throw new Error('ledger object is required.');
+
+    const saved = await withTrackerLock(folder, async () => {
+      let existing = null;
+      try {
+        existing = JSON.parse(await fs.readFile(pathname, 'utf8'));
+      } catch (err) {
+        if (!err || err.code !== 'ENOENT') throw err;
+      }
+      const chapterCode = String(incoming.chapterCode || existing?.chapterCode || folder.slice(0, 3)).toUpperCase();
+      const timing = incoming.timing || {};
+      const nextLedger = {
+        schemaVersion: 1,
+        chapterMid: chapterCode,
+        chapterCode,
+        topic: String(incoming.chapterName || existing?.topic || folder),
+        lastUpdated: new Date().toISOString(),
+        timingConfig: {
+          locked: Boolean(timing.locked),
+          fastLimit: Number(timing.fastLimit) || 45,
+          mediumLimit: Number(timing.mediumLimit) || 75,
+          slowLimit: Number(timing.slowLimit) || 110
+        },
+        concepts: incoming.concepts && typeof incoming.concepts === 'object' ? incoming.concepts : {},
+        attemptLog: buildAttemptLogFromConcepts(incoming.concepts || {}, existing?.attemptLog || {}),
+        testSessions: Array.isArray(existing?.testSessions) ? existing.testSessions : [],
+        questionMeta: existing?.questionMeta || {},
+        identity: existing?.identity || { nextIndexByConcept: {}, signatureToId: {}, retiredAttemptsByConcept: {} }
+      };
+      await atomicWriteBatch(new Map([[pathname, `${JSON.stringify(nextLedger, null, 2)}\n`]]));
+      return nextLedger;
+    });
+
+    res.json({ ok: true, folder, file: `${folder}/tracker-ledger.json`, ledger: saved });
+  } catch (error) { apiError(res, error, 400); }
+});
+
+app.post('/api/questions/update-step', async (req, res) => {
+  try {
+    await ensureData();
+    const questionId = String(req.body?.questionId || '').trim();
+    const preferredFolder = String(req.body?.folder || '').trim();
+    const steps = Array.isArray(req.body?.steps) ? req.body.steps : null;
+    if (!questionId) throw new Error('questionId is required.');
+    if (!steps || steps.length === 0) throw new Error('At least one step is required.');
+
+    const cleanSteps = steps.map((s, idx) => {
+      const stepNum = idx + 1;
+      const stepId = String(s?.stepId || 'Tu').trim() || 'Tu';
+      const body = String(s?.text ?? '').trim();
+      const indentedBody = body.includes('\n')
+        ? `\n${body.split('\n').map((line) => `        ${line}`).join('\n')}\n      `
+        : body;
+      return `      <step ${stepNum} - ${stepId}>${indentedBody}</step ${stepNum}>`;
+    });
+    const nextExplanation = `<explanation>\n${cleanSteps.join('\n')}\n    </explanation>`;
+
+    const chapters = await scanChapters();
+    const orderedChapters = preferredFolder
+      ? [
+          ...chapters.filter((c) => c.folder.toLowerCase() === preferredFolder.toLowerCase()),
+          ...chapters.filter((c) => c.folder.toLowerCase() !== preferredFolder.toLowerCase())
+        ]
+      : chapters;
+
+    const targetIdUpper = questionId.toUpperCase();
+    for (const chapter of orderedChapters) {
+      const htmlFiles = chapter.files
+        .filter((f) => f.toLowerCase().endsWith('.html'))
+        .sort((a, b) => (a === 'questions.html' ? -1 : b === 'questions.html' ? 1 : a.localeCompare(b)));
+      for (const file of htmlFiles) {
+        const fullPath = path.join(folderPath(chapter.folder), file);
+        const content = await fs.readFile(fullPath, 'utf8');
+        const blocks = parseQuestionBlocks(content);
+        const matched = blocks.find((q) => String(q.id || '').trim().toUpperCase() === targetIdUpper);
+        if (!matched) continue;
+
+        const originalBlock = content.slice(matched.start, matched.end);
+        let updatedBlock;
+        if (/<explanation\b[^>]*>[\s\S]*?<\/explanation\s*>/i.test(originalBlock)) {
+          updatedBlock = originalBlock.replace(/<explanation\b[^>]*>[\s\S]*?<\/explanation\s*>/i, nextExplanation);
+        } else if (/<explanation\s*=\s*[\s\S]*?>/i.test(originalBlock)) {
+          updatedBlock = originalBlock.replace(/<explanation\s*=\s*[\s\S]*?>/i, nextExplanation);
+        } else {
+          updatedBlock = originalBlock.replace(/<\/Qn\s*>/i, `    ${nextExplanation}\n  </Qn>`);
+        }
+
+        const nextContent = content.slice(0, matched.start) + updatedBlock + content.slice(matched.end);
+        await atomicWriteBatch(new Map([[fullPath, nextContent]]));
+        return res.json({
+          ok: true,
+          folder: chapter.folder,
+          file,
+          questionId,
+          savedAt: new Date().toISOString()
+        });
+      }
+    }
+    return res.status(404).json({
+      ok: false,
+      error: `Question "${questionId}" was not found in any disk HTML file (kept in LocalStorage).`
+    });
+  } catch (error) { apiError(res, error, 400); }
+});
+
 app.get('/api/health', (_req, res) => res.json({ ok: true, app: 'angles' }));
-app.use(express.static(PUBLIC_DIR));
-app.get(/^(?!\/api(?:\/|$)|\/manus-routes\.json$).*/, (_req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
-ensureData().then(ensureGlobalUnmapped).then(ensureRegisteredUnmappedFiles).then(() => app.listen(PORT, '0.0.0.0', () => console.log(`Angles listening on ${PORT}`))).catch((error) => { console.error(error); process.exit(1); });
+app.use(express.static(PUBLIC_DIR, {
+  setHeaders(res, filePath) {
+    const rel = path.relative(PUBLIC_DIR, filePath);
+    if (!rel.startsWith('vendor') && /\.(html|js|css)$/i.test(filePath)) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    }
+  }
+}));
+app.get(/^(?!\/api(?:\/|$)|\/manus-routes\.json$).*/, (_req, res) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
+    .set('Pragma', 'no-cache')
+    .set('Expires', '0')
+    .sendFile(path.join(PUBLIC_DIR, 'index.html'));
+});
+ensureData().then(() => app.listen(PORT, '0.0.0.0', () => console.log(`Angles listening on ${PORT}`))).catch((error) => { console.error(error); process.exit(1); });

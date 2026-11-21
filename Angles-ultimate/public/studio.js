@@ -1,4 +1,4 @@
-const state = { page: 'folders', chapters: [], selectedFolder: null, files: [], activeFile: null, activeContent: '', activeHtmlFile: null, activeHtmlContent: '', saveTimer: null, gridOn: true, creationType: null, previewRevision: 0, previewZoom: 1, previewRows: 70, previewCols: 75, previewCellWidth: 0, flowBoxObserver: null, canvasPan: false, panPointer: null, diagramQuestionGroups: [], diagramReturnScroll: null, questionIndex: null, questionRoot: '', dryRun: null };
+const state = { page: 'folders', chapters: [], selectedFolder: null, files: [], activeFile: null, activeContent: '', activeHtmlFile: null, activeHtmlContent: '', isDirty: false, saveTimer: null, gridOn: true, creationType: null, previewRevision: 0, previewZoom: 1, previewRows: 70, previewCols: 75, previewCellWidth: 0, flowBoxObserver: null, canvasPan: false, panPointer: null, diagramQuestionGroups: [], diagramReturnScroll: null, questionIndex: null, questionRoot: '', dryRun: null };
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char]));
@@ -13,12 +13,14 @@ async function api(url, options = {}) {
 function showToast(message) { const toast = $('#toast'); toast.textContent = message; toast.classList.add('is-visible'); clearTimeout(showToast.timer); showToast.timer = setTimeout(() => toast.classList.remove('is-visible'), 2400); }
 function setPage(page) {
   const previousPage = state.page;
+  if (previousPage === 'coding' && page !== 'coding' && state.isDirty) void flushSave();
   state.page = page;
   const routeTarget = (page === 'exam-info' || page === 'registry') ? 'tracker' : page;
   $$('.page').forEach((section) => section.classList.toggle('is-visible', section.dataset.route === routeTarget));
   $$('.nav-item').forEach((button) => button.classList.toggle('is-active', button.dataset.page === page));
   const diskDetails = $('#tracker-disk-ledger-details');
   if (diskDetails) diskDetails.classList.toggle('is-hidden', page !== 'tracker');
+  if (page === 'folders' && previousPage !== 'folders') void loadChapters();
   if (page === 'preview' && previousPage !== 'diagram-questions') renderPreview();
   if (page === 'settings') renderSettingsStorage();
   if (page === 'question-index' && window.refreshQuestionIndex) void window.refreshQuestionIndex();
@@ -57,25 +59,28 @@ function setSaveStatus(text, mode = '') { const status = $('#save-status'); stat
 function updateEditorMeta() { $('#editor-chapter-breadcrumb').textContent = state.selectedFolder ? formatName(state.selectedFolder) : 'Chapter'; $('#editor-file-name').textContent = state.activeFile || 'Select a file'; $('#char-count').textContent = `${state.activeContent.length.toLocaleString()} characters`; $('#line-numbers').textContent = Array.from({ length: Math.max(1, state.activeContent.split('\n').length) }, (_, index) => index + 1).join('\n'); }
 
 function renderFileList() {
-  $('#file-list').innerHTML = state.files.map((file) => `<div class="file-item ${file.name === state.activeFile ? 'is-active' : ''} ${file.type === 'css' ? 'is-css' : ''}" data-file="${escapeHtml(file.name)}"><span class="file-icon">${file.type === 'css' ? '◈' : '◇'}</span><button class="file-open" type="button">${escapeHtml(file.name)}</button><span class="file-actions"><button class="file-action file-rename" type="button" title="Rename">✎</button><button class="file-action file-delete" type="button" title="Delete">×</button></span></div>`).join('');
+  $('#file-list').innerHTML = state.files.map((file) => {
+    const isArmed = armedDeleteFile === file.name;
+    return `<div class="file-item ${file.name === state.activeFile ? 'is-active' : ''} ${file.type === 'css' ? 'is-css' : ''}" data-file="${escapeHtml(file.name)}"><span class="file-icon">${file.type === 'css' ? '◈' : '◇'}</span><button class="file-open" type="button">${escapeHtml(file.name)}</button><span class="file-actions"><button class="file-action file-rename" type="button" title="Rename">✎</button><button class="file-action file-delete ${isArmed ? 'is-armed' : ''}" type="button" title="${isArmed ? 'Click again to confirm permanent delete' : 'Delete file + its questions & marks'}" style="${isArmed ? 'background:#DC2626;color:#fff;padding:0 6px;border-radius:4px;font-size:10px;font-weight:700;' : ''}">${isArmed ? 'Sure?' : '×'}</button></span></div>`;
+  }).join('');
   $$('.file-open').forEach((button) => button.addEventListener('click', () => openFile(button.closest('.file-item').dataset.file)));
   $$('.file-rename').forEach((button) => button.addEventListener('click', () => renameFile(button.closest('.file-item').dataset.file)));
   $$('.file-delete').forEach((button) => button.addEventListener('click', () => deleteFile(button.closest('.file-item').dataset.file)));
 }
 async function loadFiles(folder) { const result = await api(`/api/chapters/${encodeURIComponent(folder)}/files`); state.files = result.files; $('#sidebar-chapter-name').textContent = formatName(folder); renderFileList(); }
 async function openChapter(folder) { await flushSave(); state.selectedFolder = folder; state.activeFile = null; state.activeHtmlFile = null; state.activeHtmlContent = ''; await loadFiles(folder); const firstFile = state.files.find((file) => file.type === 'html') || state.files[0]; if (firstFile) await openFile(firstFile.name); setPage('coding'); }
-const NOTE_DRAFTS_KEY = 'angles_note_drafts_v1';
-const STORAGE_ENABLED_KEY = 'angles_local_storage_enabled_v1';
+const STUDIO_NOTE_DRAFTS_KEY = 'angles_note_drafts_v1';
+const STUDIO_STORAGE_ENABLED_KEY = 'angles_local_storage_enabled_v1';
 
 function isLocalDraftsEnabled() {
   try {
-    const raw = window.localStorage.getItem(STORAGE_ENABLED_KEY);
+    const raw = window.localStorage.getItem(STUDIO_STORAGE_ENABLED_KEY);
     return raw === null ? true : raw !== 'false';
   } catch { return false; }
 }
 function readNoteDrafts() {
   try {
-    const raw = window.localStorage.getItem(NOTE_DRAFTS_KEY);
+    const raw = window.localStorage.getItem(STUDIO_NOTE_DRAFTS_KEY);
     return raw ? JSON.parse(raw) : {};
   } catch { return {}; }
 }
@@ -84,7 +89,7 @@ function writeNoteDraft(folder, file, content) {
   try {
     const drafts = readNoteDrafts();
     drafts[`${folder}/${file}`] = { content, updatedAt: new Date().toISOString() };
-    window.localStorage.setItem(NOTE_DRAFTS_KEY, JSON.stringify(drafts));
+    window.localStorage.setItem(STUDIO_NOTE_DRAFTS_KEY, JSON.stringify(drafts));
     window.dispatchEvent(new CustomEvent('angles:storage-updated'));
   } catch { /* ignore quota errors */ }
 }
@@ -92,7 +97,7 @@ function removeNoteDraft(key) {
   try {
     const drafts = readNoteDrafts();
     delete drafts[key];
-    window.localStorage.setItem(NOTE_DRAFTS_KEY, JSON.stringify(drafts));
+    window.localStorage.setItem(STUDIO_NOTE_DRAFTS_KEY, JSON.stringify(drafts));
     window.dispatchEvent(new CustomEvent('angles:storage-updated'));
   } catch { /* ignore */ }
 }
@@ -148,24 +153,145 @@ function renderSettingsStorage() {
   }));
 }
 
-async function openFile(file) { if (!state.selectedFolder) return; await flushSave(); try { setSaveStatus('Opening…', 'saving'); const result = await api(`/api/chapters/${encodeURIComponent(state.selectedFolder)}/files/${encodeURIComponent(file)}`); const draftKey = `${state.selectedFolder}/${file}`; const localDraft = isLocalDraftsEnabled() ? readNoteDrafts()[draftKey] : null; const finalContent = (localDraft && typeof localDraft.content === 'string' && localDraft.content !== result.content) ? localDraft.content : result.content; state.activeFile = file; state.activeContent = finalContent; if (file.endsWith('.html')) { state.activeHtmlFile = file; state.activeHtmlContent = finalContent; } $('#code-editor').value = finalContent; updateEditorMeta(); await loadFiles(state.selectedFolder); setSaveStatus(finalContent !== result.content ? 'Restored local draft' : 'Saved to disk'); } catch (error) { showToast(error.message); setSaveStatus('Could not open', 'dirty'); } }
-async function saveCurrentFile() { if (!state.selectedFolder || !state.activeFile) return; const content = $('#code-editor').value; state.activeContent = content; if (state.activeFile.endsWith('.html')) { state.activeHtmlFile = state.activeFile; state.activeHtmlContent = content; } writeNoteDraft(state.selectedFolder, state.activeFile, content); setSaveStatus('Saving…', 'saving'); try { await api(`/api/chapters/${encodeURIComponent(state.selectedFolder)}/files/${encodeURIComponent(state.activeFile)}`, { method: 'PUT', body: JSON.stringify({ content }) }); setSaveStatus(isLocalDraftsEnabled() ? 'Saved (Disk + Local)' : 'Saved to disk'); if (state.activeFile.endsWith('.html') && window.refreshQuestionIndex) void window.refreshQuestionIndex(); } catch (error) { setSaveStatus(isLocalDraftsEnabled() ? 'Saved to browser LocalStorage' : 'Save failed', isLocalDraftsEnabled() ? '' : 'dirty'); showToast(isLocalDraftsEnabled() ? 'Disk unavailable — saved in browser LocalStorage' : error.message); } updateEditorMeta(); }
-function queueSave() { const val = $('#code-editor').value; state.activeContent = val; if (state.activeFile?.endsWith('.html')) { state.activeHtmlFile = state.activeFile; state.activeHtmlContent = val; } updateEditorMeta(); setSaveStatus('Unsaved changes', 'dirty'); clearTimeout(state.saveTimer); state.saveTimer = setTimeout(saveCurrentFile, 650); }
-async function flushSave() { clearTimeout(state.saveTimer); if (state.selectedFolder && state.activeFile && $('#code-editor').value !== state.activeContent) await saveCurrentFile(); }
+async function openFile(file) {
+  if (!state.selectedFolder) return;
+  await flushSave();
+  try {
+    setSaveStatus('Opening…', 'saving');
+    const result = await api(`/api/chapters/${encodeURIComponent(state.selectedFolder)}/files/${encodeURIComponent(file)}`);
+    const draftKey = `${state.selectedFolder}/${file}`;
+    const localDraft = isLocalDraftsEnabled() ? readNoteDrafts()[draftKey] : null;
+    const draftTs = localDraft?.updatedAt ? Date.parse(localDraft.updatedAt) : 0;
+    const diskTs = result.updatedAt ? Date.parse(result.updatedAt) : 0;
+    const useLocalDraft = Boolean(
+      localDraft &&
+      typeof localDraft.content === 'string' &&
+      localDraft.content !== result.content &&
+      draftTs > diskTs
+    );
+    if (localDraft && !useLocalDraft) removeNoteDraft(draftKey);
+    const finalContent = useLocalDraft ? localDraft.content : result.content;
+    state.activeFile = file;
+    state.activeContent = finalContent;
+    state.isDirty = useLocalDraft;
+    if (file.endsWith('.html')) {
+      state.activeHtmlFile = file;
+      state.activeHtmlContent = finalContent;
+    }
+    $('#code-editor').value = finalContent;
+    updateEditorMeta();
+    await loadFiles(state.selectedFolder);
+    setSaveStatus(useLocalDraft ? 'Restored unsaved local draft' : 'Saved to disk');
+  } catch (error) {
+    showToast(error.message);
+    setSaveStatus('Could not open', 'dirty');
+  }
+}
+async function saveCurrentFile(useKeepalive = false) {
+  if (!state.selectedFolder || !state.activeFile) return;
+  const folder = state.selectedFolder;
+  const file = state.activeFile;
+  const content = $('#code-editor').value;
+  state.activeContent = content;
+  if (file.endsWith('.html')) {
+    state.activeHtmlFile = file;
+    state.activeHtmlContent = content;
+  }
+  setSaveStatus('Saving…', 'saving');
+  try {
+    await api(`/api/chapters/${encodeURIComponent(folder)}/files/${encodeURIComponent(file)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ content }),
+      keepalive: useKeepalive
+    });
+    state.isDirty = false;
+    removeNoteDraft(`${folder}/${file}`);
+    setSaveStatus('Saved to disk');
+    window.dispatchEvent(new CustomEvent('angles:storage-updated', { detail: { source: 'coding', folder, file } }));
+    if (file.endsWith('.html') && window.refreshQuestionIndex) void window.refreshQuestionIndex();
+  } catch (error) {
+    writeNoteDraft(folder, file, content);
+    setSaveStatus(isLocalDraftsEnabled() ? 'Saved to browser LocalStorage (disk offline)' : 'Save failed', isLocalDraftsEnabled() ? '' : 'dirty');
+    showToast(isLocalDraftsEnabled() ? 'Disk unavailable — saved in browser LocalStorage' : error.message);
+  }
+  updateEditorMeta();
+}
+function queueSave() {
+  const val = $('#code-editor').value;
+  state.activeContent = val;
+  state.isDirty = true;
+  if (state.activeFile?.endsWith('.html')) {
+    state.activeHtmlFile = state.activeFile;
+    state.activeHtmlContent = val;
+  }
+  updateEditorMeta();
+  setSaveStatus('Unsaved changes', 'dirty');
+  clearTimeout(state.saveTimer);
+  state.saveTimer = setTimeout(() => void saveCurrentFile(false), 500);
+}
+async function flushSave(useKeepalive = false) {
+  clearTimeout(state.saveTimer);
+  if (state.selectedFolder && state.activeFile && state.isDirty) {
+    await saveCurrentFile(useKeepalive);
+  }
+}
 
 function openCreator(type) { state.creationType = type; $('#inline-file-label').textContent = type === 'css' ? 'New Style.css' : 'New Topic.html'; $('#inline-file-input').value = ''; $('#inline-file-creator').classList.remove('is-hidden'); $('#inline-file-input').focus(); }
 function closeCreator() { state.creationType = null; $('#inline-file-creator').classList.add('is-hidden'); }
 async function submitCreator() { const input = $('#inline-file-input'); const name = input.value.trim(); if (!name || !state.selectedFolder) return; try { const result = await api(`/api/chapters/${encodeURIComponent(state.selectedFolder)}/files`, { method: 'POST', body: JSON.stringify({ name, type: state.creationType }) }); closeCreator(); await loadFiles(state.selectedFolder); await openFile(result.file); showToast(`${result.file} created on disk`); } catch (error) { showToast(error.message); } }
 async function renameFile(file) { const base = file.replace(/\.(html|css)$/i, ''); const name = window.prompt(`Rename ${file}:`, base); if (!name || name === base) return; try { const result = await api(`/api/chapters/${encodeURIComponent(state.selectedFolder)}/files/${encodeURIComponent(file)}`, { method: 'PATCH', body: JSON.stringify({ name }) }); if (state.activeFile === file) state.activeFile = result.file; if (state.activeHtmlFile === file) state.activeHtmlFile = result.file; await loadFiles(state.selectedFolder); updateEditorMeta(); showToast(`${result.file} renamed`); } catch (error) { showToast(error.message); } }
-async function deleteFile(file) { if (!window.confirm(`Delete ${file} from disk?`)) return; try { await flushSave(); await api(`/api/chapters/${encodeURIComponent(state.selectedFolder)}/files/${encodeURIComponent(file)}`, { method: 'DELETE' }); if (state.activeFile === file) { state.activeFile = null; state.activeContent = ''; $('#code-editor').value = ''; } if (state.activeHtmlFile === file) { state.activeHtmlFile = null; state.activeHtmlContent = ''; } await loadFiles(state.selectedFolder); const next = state.files.find((item) => item.type === 'html') || state.files[0]; if (next) await openFile(next.name); else updateEditorMeta(); showToast(`${file} deleted`); } catch (error) { showToast(error.message); } }
+let armedDeleteFile = '';
+let armedDeleteTimer = null;
+
+async function deleteFile(file) {
+  if (armedDeleteFile !== file) {
+    armedDeleteFile = file;
+    clearTimeout(armedDeleteTimer);
+    renderFileList();
+    showToast(`Click × again within 4s to delete ${file} (also removes its questions & attempt history)`);
+    armedDeleteTimer = setTimeout(() => {
+      armedDeleteFile = '';
+      renderFileList();
+    }, 4000);
+    return;
+  }
+  armedDeleteFile = '';
+  clearTimeout(armedDeleteTimer);
+  try {
+    await flushSave();
+    const folder = state.selectedFolder;
+    const result = await api(`/api/chapters/${encodeURIComponent(folder)}/files/${encodeURIComponent(file)}`, { method: 'DELETE' });
+    removeNoteDraft(`${folder}/${file}`);
+    if (state.activeFile === file) { state.activeFile = null; state.activeContent = ''; state.isDirty = false; $('#code-editor').value = ''; }
+    if (state.activeHtmlFile === file) { state.activeHtmlFile = null; state.activeHtmlContent = ''; }
+    await loadFiles(folder);
+    const next = state.files.find((item) => item.type === 'html') || state.files[0];
+    if (next) await openFile(next.name); else updateEditorMeta();
+    const purgedQs = Array.isArray(result.removedQuestionIds) ? result.removedQuestionIds.length : 0;
+    showToast(purgedQs > 0 ? `${file} deleted · purged ${purgedQs} question(s) & marks` : `${file} deleted from disk`);
+    if (window.refreshQuestionIndex) void window.refreshQuestionIndex();
+    window.dispatchEvent(new CustomEvent('angles:file-deleted', {
+      detail: {
+        folder,
+        file,
+        removedQuestionIds: result.removedQuestionIds || [],
+        removedConceptIds: result.removedConceptIds || [],
+        ledgerRemoved: Boolean(result.ledgerRemoved)
+      }
+    }));
+    window.dispatchEvent(new CustomEvent('angles:storage-updated', { detail: { source: 'file-delete', folder, file } }));
+  } catch (error) { showToast(error.message); }
+}
 
 function insertSnippet(kind) {
   const snippets = {
     math: '<math == sin^2 theta + cos^2 theta = 1>',
     boxw: '<box w points = (4,4),(14,4),(14,8),(4,8)>Text sits centered on 25% bottom-parallel baseline</box w>',
-    lined: '<line d line-color = #2457FF text-color = #171817>(4,10),(14,10) Label 4mm above line</line d>',
+    enclave: '<enclave points = (1,1),(14,1),(14,6),(1,6) background-color = #FFFFFF color = #CBD5E1></enclave>',
+    lined: '<line d line-color = #2457FF text-color = #171817 floating = 2mm>(4,10),(14,10) Label 2mm above line</line d>',
+    arc: '<arc m points = (4,12),(10,12) depth = 1 color = #D97706 floating = 2mm>θ</arc m>',
     table: '<table r = 2 c = 3>\n  <c11 = S.No> <c12 = Rule> <c13 = Example>\n  <c21 = 1> <c22 = Your rule> <c23 = Write an example.>\n</table>',
-    question: '<qn all>\n  <Qn>\n    <mid = TRG.C1>\n    <step id = T1>\n    <type = Quantitative Aptitude>\n    <text = Write the question here.>\n    <Options>\n      <A = Option one>\n      <B = Option two>\n    </Options>\n    <answer = B>\n    <explanation = Add the reasoning here.>\n  </Qn>\n</qn all>',
+    question: '<Qn>\n  <target == QA-TRG-BS-FR>\n  <type = Quantitative Aptitude>\n  <text = Write the question here.>\n  <Options>\n    <A = Option one>\n    <B = Option two>\n  </Options>\n  <answer = B>\n  <explanation>\n    <step 1 - QA-TRG-BS-FR-MC1>\n      Apply the core micro-concept here.\n    </step 1>\n    <step 2 - TG>\n      Simplify to the final answer.\n    </step 2>\n  </explanation>\n</Qn>',
     tags: '<x = incorrect> <ok = corrected> <hide == reveal me>\n<rule == Add a grammar rule.>\n<trap == Add an exam trap.>\n<chain == Step one -> Step two -> Step three>',
     grid: '<grid id="spatial-note" class="spatial-card">\n  <h2>Spatial note</h2>\n  <p>Place this box on the graph sheet.</p>\n</grid>'
   };
@@ -289,71 +415,116 @@ function bindQuizGroups(root) {
     }));
   });
 }
-function prepareDiagramQuestionThumbnails(root) {
+function buildScopedPlaceholderNode(scopedLabel, initialCount, index) {
+  const thumbnail = document.createElement('div');
+  thumbnail.className = 'mkml-qn-thumbnail mkml-qn-scoped-placeholder';
+  thumbnail.setAttribute('role', 'group');
+  thumbnail.setAttribute('aria-label', `${scopedLabel} question placeholder (${initialCount} ${initialCount === 1 ? 'question' : 'questions'})`);
+
+  const topRow = document.createElement('div');
+  topRow.className = 'mkml-qn-placeholder-head';
+  const badge = document.createElement('span');
+  badge.className = 'mkml-qn-concept-badge';
+  badge.textContent = scopedLabel;
+  const countWrap = document.createElement('span');
+  countWrap.className = 'mkml-qn-count-wrap';
+  const countText = document.createElement('strong');
+  countText.textContent = String(initialCount);
+  const label = document.createElement('span');
+  label.textContent = ` ${initialCount === 1 ? 'question' : 'questions'}`;
+  countWrap.append(countText, label);
+  topRow.append(badge, countWrap);
+
+  const actionsRow = document.createElement('div');
+  actionsRow.className = 'mkml-qn-placeholder-actions';
+
+  const studyBtn = document.createElement('button');
+  studyBtn.type = 'button';
+  studyBtn.className = 'mkml-qn-mode-btn is-study';
+  studyBtn.textContent = 'Study Mode ↗';
+  studyBtn.title = `Open ${scopedLabel} in Study Mode`;
+  studyBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    redirectToScopedQuestions(index, 'study');
+  });
+
+  const shallowBtn = document.createElement('button');
+  shallowBtn.type = 'button';
+  shallowBtn.className = 'mkml-qn-mode-btn is-shallow';
+  shallowBtn.textContent = 'Shallow Mode ↗';
+  shallowBtn.title = `Open ${scopedLabel} in Shallow Mode`;
+  shallowBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    redirectToScopedQuestions(index, 'shallow');
+  });
+
+  actionsRow.append(studyBtn, shallowBtn);
+  thumbnail.append(topRow, actionsRow);
+  thumbnail.addEventListener('click', () => redirectToScopedQuestions(index, 'study'));
+  return { thumbnail, countText, label };
+}
+
+function prepareDiagramQuestionThumbnails(root, revision = state.previewRevision) {
   state.diagramQuestionGroups = [];
   const previewSource = state.activeFile?.endsWith('.html') ? state.activeContent : state.activeHtmlContent;
-  const rootMidMatch = /<!--\s*angles-root-mid:\s*([\w.-]+)\s*-->/i.exec(previewSource || '');
-  const chapterRootMid = rootMidMatch ? rootMidMatch[1].trim().toUpperCase() : '';
+  const chapterMatch = /<Chapter\s*==\s*([^,>]+)/i.exec(previewSource || '');
+  const chapterParts = chapterMatch ? chapterMatch[1].trim().toUpperCase().split('-') : [];
+  const chapterShortCode = chapterParts.length >= 2 ? chapterParts[1] : (chapterParts[0] || '');
+
   root.querySelectorAll('.mkml-flow-box').forEach((box) => {
+    // 1. Modern 1-line portal box: <box points = ... path = QA-TRG-BS-FR></box>
+    const pathHost = box.querySelector(':scope > .mkml-flow-box-content > .mkml-qn-path-host');
+    if (pathHost) {
+      const targetPath = (pathHost.dataset.questionPath || box.dataset.questionPath || '').trim();
+      const parts = targetPath.split('-').filter(Boolean);
+      const rootCode = parts.length >= 2 ? parts[1].toUpperCase() : chapterShortCode;
+      const entry = {
+        group: null,
+        count: 0,
+        rootMid: rootCode,
+        conceptMid: targetPath || 'ALL',
+        scopedLabel: targetPath || 'QUESTIONS',
+        path: targetPath
+      };
+      const index = state.diagramQuestionGroups.push(entry) - 1;
+      const { thumbnail, countText, label } = buildScopedPlaceholderNode(entry.scopedLabel, 0, index);
+      pathHost.replaceWith(thumbnail);
+      if (state.selectedFolder && targetPath) {
+        api(`/api/chapters/${encodeURIComponent(state.selectedFolder)}/questions?path=${encodeURIComponent(targetPath)}`)
+          .then((res) => {
+            if (revision !== state.previewRevision) return;
+            const cnt = Number(res.count) || 0;
+            entry.count = cnt;
+            countText.textContent = String(cnt);
+            label.textContent = ` ${cnt === 1 ? 'question' : 'questions'}`;
+            thumbnail.setAttribute('aria-label', `${entry.scopedLabel} question placeholder (${cnt} ${cnt === 1 ? 'question' : 'questions'})`);
+            if (cnt > 0 && Array.isArray(res.questions)) {
+              const temp = document.createElement('div');
+              temp.innerHTML = compileAngles(`<qn all mode = normal>\n${res.questions.map((q) => q.block).join('\n')}\n</qn all>`);
+              entry.group = temp.querySelector('.quiz-group');
+            }
+            fitFlowBoxes();
+          })
+          .catch(() => { /* keep 0 count if offline */ });
+      }
+      return;
+    }
+
+    // 2. Legacy inline <box><qn all>...</qn all></box>
     const groups = [...box.querySelectorAll('.mkml-flow-box-content .quiz-group')]
       .filter((group) => group.closest('.mkml-flow-box') === box);
     groups.forEach((group) => {
       const count = Number(group.dataset.questionCount) || group.querySelectorAll('.question-card').length;
-      let conceptMid = (box.dataset.conceptMid || '').toUpperCase();
-      if (!conceptMid) {
-        const firstCardMid = group.querySelector('.question-card[data-mid]')?.dataset.mid || '';
-        const parsedPart = firstCardMid.split('/')[0]?.trim().split('.').pop() || '';
-        if (/^(?:C\d+|UN)$/i.test(parsedPart)) conceptMid = parsedPart.toUpperCase();
-      }
-      const scopedLabel = conceptMid
-        ? (chapterRootMid ? `${chapterRootMid}.${conceptMid}` : conceptMid)
-        : (chapterRootMid || 'CONCEPT');
-      const index = state.diagramQuestionGroups.push({ group: group.cloneNode(true), count, rootMid: chapterRootMid, conceptMid: conceptMid || 'ALL', scopedLabel }) - 1;
-      const thumbnail = document.createElement('div');
-      thumbnail.className = 'mkml-qn-thumbnail mkml-qn-scoped-placeholder';
-      thumbnail.setAttribute('role', 'group');
-      thumbnail.setAttribute('aria-label', `${scopedLabel} question placeholder (${count} ${count === 1 ? 'question' : 'questions'})`);
-
-      const topRow = document.createElement('div');
-      topRow.className = 'mkml-qn-placeholder-head';
-      const badge = document.createElement('span');
-      badge.className = 'mkml-qn-concept-badge';
-      badge.textContent = scopedLabel;
-      const countWrap = document.createElement('span');
-      countWrap.className = 'mkml-qn-count-wrap';
-      const countText = document.createElement('strong');
-      countText.textContent = String(count);
-      const label = document.createElement('span');
-      label.textContent = ` ${count === 1 ? 'question' : 'questions'}`;
-      countWrap.append(countText, label);
-      topRow.append(badge, countWrap);
-
-      const actionsRow = document.createElement('div');
-      actionsRow.className = 'mkml-qn-placeholder-actions';
-
-      const studyBtn = document.createElement('button');
-      studyBtn.type = 'button';
-      studyBtn.className = 'mkml-qn-mode-btn is-study';
-      studyBtn.textContent = 'Study Mode ↗';
-      studyBtn.title = `Open ${scopedLabel} in Study Mode`;
-      studyBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        redirectToScopedQuestions(index, 'study');
-      });
-
-      const shallowBtn = document.createElement('button');
-      shallowBtn.type = 'button';
-      shallowBtn.className = 'mkml-qn-mode-btn is-shallow';
-      shallowBtn.textContent = 'Shallow Mode ↗';
-      shallowBtn.title = `Open ${scopedLabel} in Shallow Mode`;
-      shallowBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        redirectToScopedQuestions(index, 'shallow');
-      });
-
-      actionsRow.append(studyBtn, shallowBtn);
-      thumbnail.append(topRow, actionsRow);
-      thumbnail.addEventListener('click', () => redirectToScopedQuestions(index, 'study'));
+      const conceptPath = (box.dataset.questionPath || box.dataset.conceptMid || '').trim();
+      const scopedLabel = conceptPath || chapterShortCode || 'CONCEPT';
+      const index = state.diagramQuestionGroups.push({
+        group: group.cloneNode(true),
+        count,
+        rootMid: chapterShortCode,
+        conceptMid: conceptPath || 'ALL',
+        scopedLabel
+      }) - 1;
+      const { thumbnail } = buildScopedPlaceholderNode(scopedLabel, count, index);
       group.replaceWith(thumbnail);
     });
   });
@@ -500,13 +671,13 @@ function renderPreview() {
   window.MKML.renderMath(content);
   const flowLines = [...content.children].filter((node) => node.matches('.mkml-flow-lines'));
   $('#preview-flow-lines-layer').replaceChildren(...flowLines);
-  const overFlowLines = [...content.children].filter((node) => node.matches('.mkml-flow-lines-m, .mkml-line-d-label'));
+  const overFlowLines = [...content.children].filter((node) => node.matches('.mkml-flow-lines-m, .mkml-line-d-label, .mkml-arc-label'));
   $('#preview-flow-lines-m-layer').replaceChildren(...overFlowLines);
   window.MKML.renderMath($('#preview-flow-lines-m-layer'));
   const flowBoxes = [...content.querySelectorAll('.mkml-flow-box')];
   $('#preview-flow-boxes-layer').replaceChildren(...flowBoxes);
   window.MKML.renderMath($('#preview-flow-boxes-layer'));
-  prepareDiagramQuestionThumbnails($('#preview-flow-boxes-layer'));
+  prepareDiagramQuestionThumbnails($('#preview-flow-boxes-layer'), revision);
   observeFlowBoxes($('#preview-flow-boxes-layer'));
   $$('.mkml-spoiler').forEach((item) => {
     const reveal = () => item.classList.toggle('revealed');
@@ -595,8 +766,9 @@ function fitFlowBoxes() {
     const authoredWidth = (Number(box.dataset.gridWidth) || 1) * cell;
     const authoredHeight = (Number(box.dataset.gridHeight) || 1) * 32;
     const isBoxW = box.dataset.boxW === 'true';
-    const width = isBoxW ? authoredWidth : Math.max(authoredWidth, content.scrollWidth);
-    const height = isBoxW ? authoredHeight : Math.max(authoredHeight, content.scrollHeight);
+    const isPortalBox = Boolean(box.dataset.questionPath);
+    const width = isBoxW || isPortalBox ? authoredWidth : Math.max(authoredWidth, content.scrollWidth);
+    const height = isBoxW || isPortalBox ? authoredHeight : Math.max(authoredHeight, content.scrollHeight);
     box.style.width = `${Math.ceil(width)}px`;
     box.style.height = `${Math.ceil(height)}px`;
     const minCol = Number(box.dataset.minCol) || 1;
@@ -662,7 +834,7 @@ function endCanvasPan(event) {
   $('#preview-viewport').classList.remove('is-panning');
 }
 function setupEvents() {
-  $$('.nav-item, [data-page="folders"], [data-page="coding"]').forEach((button) => button.addEventListener('click', () => setPage(button.dataset.page)));
+  $$('.nav-item, [data-page="folders"], [data-page="coding"], [data-page="registry"]').forEach((button) => button.addEventListener('click', () => setPage(button.dataset.page)));
   window.addEventListener('angles:sync-nav', (event) => {
     const syncedPage = event?.detail?.page;
     if (!['tracker', 'exam-info', 'registry'].includes(syncedPage)) return;
@@ -676,11 +848,14 @@ function setupEvents() {
   window.addEventListener('angles:storage-updated', () => {
     if (state.page === 'settings') renderSettingsStorage();
   });
+  window.addEventListener('angles:chapters-updated', () => {
+    void loadChapters();
+  });
   $('#settings-refresh')?.addEventListener('click', () => { renderSettingsStorage(); showToast('Storage stats refreshed'); });
   $('#ls-autosave-toggle')?.addEventListener('change', (event) => {
     const enabled = Boolean(event.target.checked);
     if (window.anglesStorage) window.anglesStorage.setEnabled(enabled);
-    else { try { window.localStorage.setItem(STORAGE_ENABLED_KEY, enabled ? 'true' : 'false'); } catch {} }
+    else { try { window.localStorage.setItem(STUDIO_STORAGE_ENABLED_KEY, enabled ? 'true' : 'false'); } catch {} }
     renderSettingsStorage();
     const fb = $('#ls-feedback');
     if (fb) fb.textContent = enabled ? 'Browser LocalStorage auto-save is enabled.' : 'Auto-save paused (existing backups remain untouched).';
@@ -744,7 +919,7 @@ function setupEvents() {
     if (fb) fb.textContent = 'Cleared all cached browser note drafts.';
     showToast('Local note drafts cleared');
   });
-  $('#new-chapter-button').addEventListener('click', createChapter); $('[data-action="new-chapter"]').addEventListener('click', createChapter); $('#refresh-button').addEventListener('click', async () => { await loadChapters(); showToast('Disk refreshed'); });
+  $('#refresh-button').addEventListener('click', async () => { await loadChapters(); showToast('Disk refreshed'); });
   $('#new-html-button').addEventListener('click', () => openCreator('html')); $('#new-css-button').addEventListener('click', () => openCreator('css')); $('#inline-file-input').addEventListener('keydown', (event) => { if (event.key === 'Enter') submitCreator(); if (event.key === 'Escape') closeCreator(); }); $('#inline-file-cancel').addEventListener('click', closeCreator);
   $('#sidebar-collapse').addEventListener('click', () => $('#chapter-sidebar').classList.toggle('is-collapsed')); $('#open-preview-button').addEventListener('click', async () => { await flushSave(); setPage('preview'); }); $$('.quick-toolbar [data-insert]').forEach((button) => button.addEventListener('click', () => insertSnippet(button.dataset.insert))); $('#code-editor').addEventListener('input', queueSave); $('#code-editor').addEventListener('scroll', () => { $('#line-numbers').scrollTop = $('#code-editor').scrollTop; });
   $('#diagram-question-back').addEventListener('click', returnToDiagram);
@@ -767,11 +942,34 @@ function setupEvents() {
     if (event.altKey && key === 'q') { event.preventDefault(); insertSnippet('question'); }
     if (event.altKey && key === 'g' && !inPreview) { event.preventDefault(); insertSnippet('grid'); }
     if (event.altKey && key === 'p') { event.preventDefault(); await flushSave(); setPage('preview'); }
+    if ((event.ctrlKey || event.metaKey) && key === 's' && state.page === 'coding') { event.preventDefault(); await flushSave(); showToast('Saved to disk'); }
     if (event.ctrlKey && key === 'b') { event.preventDefault(); $('#chapter-sidebar').classList.toggle('is-collapsed'); }
     if (event.key === 'F11' && inPreview) { event.preventDefault(); await toggleImmersiveMode(); }
   });
+  window.addEventListener('pagehide', () => { if (state.isDirty) void flushSave(true); });
+  window.addEventListener('beforeunload', () => { if (state.isDirty) void flushSave(true); });
+  window.addEventListener('angles:chapters-updated', async (event) => {
+    const deletedFolder = event?.detail?.deletedFolder;
+    await loadChapters();
+    if (deletedFolder) {
+      const drafts = readNoteDrafts();
+      Object.keys(drafts).forEach((key) => {
+        if (key.startsWith(`${deletedFolder}/`)) removeNoteDraft(key);
+      });
+      if (state.selectedFolder === deletedFolder) {
+        state.selectedFolder = null;
+        state.activeFile = null;
+        state.activeContent = '';
+        state.activeHtmlFile = null;
+        state.activeHtmlContent = '';
+        state.isDirty = false;
+        $('#code-editor').value = '';
+        $('#file-list').innerHTML = '';
+        updateEditorMeta();
+      }
+    }
+  });
 }
-async function createChapter() { const name = window.prompt('Name your new chapter folder:'); if (!name) return; const mid = window.prompt('Root MID for this chapter (e.g. PN):'); if (!mid) return; try { const result = await api('/api/chapters', { method: 'POST', body: JSON.stringify({ name, mid }) }); await loadChapters(); showToast(`Created ${formatName(result.folder)} · ${mid.trim().toUpperCase()}`); await openChapter(result.folder); } catch (error) { showToast(error.message); } }
 window.openQuestionFile = async (folder, file) => { await openChapter(folder); await openFile(file); setPage('coding'); };
 function updateClock() { $('#topbar-clock').textContent = new Intl.DateTimeFormat([], { hour: '2-digit', minute: '2-digit' }).format(new Date()); }
 setupGridLabels(); setupEvents(); setPreviewZoom(state.previewZoom); updateClock(); setInterval(updateClock, 30000); loadChapters(); const initialPage = window.location.hash.slice(1); if (['coding', 'preview', 'graph', 'shortcuts', 'settings', 'question-index', 'tracker', 'exam-info', 'registry'].includes(initialPage)) setPage(initialPage);

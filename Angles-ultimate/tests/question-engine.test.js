@@ -3,50 +3,118 @@ const assert = require('node:assert/strict');
 const engine = require('../question-engine');
 const MKML = require('../public/mkml.js');
 
-assert.equal(engine.normalizeMid(' pn.c3 '), 'PN.C3');
-assert.deepEqual(engine.parseMids('pn.c2 / PN.c6'), ['PN.C2', 'PN.C6']);
-assert.equal(engine.rootOf('pn.c3'), 'PN');
-assert.equal(engine.conceptOf('PN.C3'), 'C3');
-const batch = `<qn-ingest><Qn><mid = PN.C2 / PN.C6><type =  sentence   improvement ><text = A prompt.><Options><A = Yes><B = No></Options><answer = B></Qn><Qn><mid = PN.UN><type = Fill In the Blanks><gap = Pronoun Order (1-2-3 Rule)><text = Another prompt.><Options><A = Yes><B = No></Options><answer = A></Qn></qn-ingest>`;
-const parsed = engine.parseQuestionBlocks(batch);
+// 1. Step-ID parsing & normalization (Permanent Full Base IDs, TG, Tu)
+assert.deepEqual(engine.splitStepIdTokens('QA-TRG-BS-FR-MC1, tu / tg'), ['QA-TRG-BS-FR-MC1', 'Tu', 'TG']);
+assert.deepEqual(engine.splitStepIdTokens('QA-TRG-BS-FR-MC2'), ['QA-TRG-BS-FR-MC2']);
+assert.equal(engine.inferConceptTargetFromStepIds(['TG', 'QA-TRG-BS-FR-MC1']), 'QA-TRG-BS-FR');
+assert.equal(engine.inferConceptTargetFromStepIds(['Tu', 'TG']), '');
+
+// 2. Parsing <Qn> blocks with <target == ...> and permanent Full Base IDs
+const sampleBatch = `
+<Qn>
+  <id == QA-TRG-BS-FR-1>
+  <target == QA-TRG-BS-FR>
+  <type = Quantitative Aptitude>
+  <text = If tan A = 4/3, find sin A.>
+  <Options><A = 4/5><B = 3/5></Options>
+  <answer = A>
+  <explanation>
+    <step 1 - QA-TRG-BS-FR-MC1>From <math == tan A = 4/3>, oppo = 4, adj = 3.</step 1>
+    <step 2 - QA-TRG-BS-FR-MC2>Triplet (3, 4, 5) gives hypo = 5.</step 2>
+    <step 3 - TG>sin A = 4/5.</step 3>
+  </explanation>
+</Qn>
+<Qn>
+  <type = Quantitative Aptitude>
+  <gap = Sec-Tan Identity>
+  <text = Solve sec^2 A - tan^2 A + 2.>
+  <Options><A = 3><B = 2></Options>
+  <answer = A>
+  <explanation>
+    <step 1 - QA-TRG-BS-FR-MC1>Identify trig terms.</step 1>
+    <step 2 - Tu>Apply sec^2 A - tan^2 A = 1 identity.</step 2>
+  </explanation>
+</Qn>`;
+
+const parsed = engine.parseQuestionBlocks(sampleBatch);
 assert.equal(parsed.length, 2);
-assert.deepEqual(parsed[0].mids, ['PN.C2', 'PN.C6']);
-assert.equal(parsed[0].text, 'A prompt.');
-assert.equal(parsed[0].type, 'SENTENCE IMPROVEMENT');
-const legacyTypeTag = engine.parseQuestionBlocks('<Qn><mid = PN.C2 / PN.C4><qn type = error spotting><text = Q?><Options><A = Yes><B = No></Options><answer = A></Qn>')[0];
-assert.equal(legacyTypeTag.type, 'ERROR SPOTTING');
-assert.deepEqual(legacyTypeTag.mids, ['PN.C2', 'PN.C4']);
-assert.deepEqual(engine.validateQuestion(legacyTypeTag), []);
-assert.deepEqual(engine.uniqueQuestionsByText([{ text: 'Same <b>prompt</b>' }, { text: ' same prompt ' }]).length, 1);
+assert.equal(parsed[0].target, 'QA-TRG-BS-FR');
+assert.equal(parsed[0].inferredTarget, 'QA-TRG-BS-FR');
+assert.equal(parsed[0].hasTu, false);
+assert.equal(parsed[0].isCovered, true);
+assert.deepEqual(parsed[0].stepIds, ['QA-TRG-BS-FR-MC1', 'QA-TRG-BS-FR-MC2', 'TG']);
 assert.deepEqual(engine.validateQuestion(parsed[0]), []);
-assert.equal(parsed[1].mids[0], 'PN.UN');
-assert.equal(parsed[1].gap, 'Pronoun Order (1-2-3 Rule)');
-assert.equal(parsed[1].text, 'Another prompt.');
-assert.equal(parsed[1].type, 'FILL IN THE BLANKS');
-const legacyQuestion = engine.parseQuestionBlocks('<Qn><mid = PN.C1><text = Old card><Options><A = One><B = Two></Options><answer = A></Qn>')[0];
-assert.equal(legacyQuestion.type, '');
-assert.ok(engine.validateQuestion(legacyQuestion).includes('Missing <type = ...>'));
-assert.equal(legacyQuestion.type || 'UNTYPED', 'UNTYPED');
-assert.deepEqual(engine.gapsByFrequency([{ gap: 'Ordering' }, { gap: 'Ordering' }, { gap: '' }]), [{ label: 'Ordering', count: 2 }, { label: 'General Unmapped', count: 1 }]);
-assert.deepEqual(engine.calculateChapterReadiness(0, 0), { label: 'N/A (0 Questions)', percent: null, total: 0 });
-assert.deepEqual(engine.calculateChapterReadiness(0, 50), { label: '0%', percent: 0, total: 50 });
-const batchForCompletion = '<Qn><mid = PN.C1><text = a></Qn><Qn><mid = PN.C2 / PN.UN / UN.UN><text = b></Qn><Qn><mid = UN.UN><text = c></Qn><Qn><mid = PN.C3><text = d></Qn><Qn><mid = PN.C4><text = e></Qn>';
-assert.deepEqual(engine.calculatePastedBatchCompletion(batchForCompletion), { total: 5, unmapped: 2, completed: 3, completion: 60, byRoot: { PN: { total: 4, unmapped: 1 } }, globalTotal: 2, globalUnmapped: 2 });
-const tenQuestionBatch = [
-  'PN.C2', 'PN.C4 / PN.C5', 'PN.C7', 'PN.un', 'BS.C1', 'BS.UN',
-  'BS.C1 / BS.UN', 'PR.C1', 'UN.UN', 'un.un'
-].map((mid) => `<Qn><mid = ${mid}><text = Sample></Qn>`).join('');
-assert.deepEqual(engine.calculatePastedBatchCompletion(tenQuestionBatch), {
-  total: 10, unmapped: 5, completed: 5, completion: 50,
-  byRoot: { PN: { total: 4, unmapped: 1 }, BS: { total: 3, unmapped: 2 }, PR: { total: 1, unmapped: 0 } },
-  globalTotal: 2, globalUnmapped: 2
-});
-const notes = '<mid = c1><h2>Case Matrix</h2><qn all><Qn><mid = PN.C1><text = Case?><Options><A = One><B = Two></Options><answer = A></Qn></qn all></mid><mid = c2><h2>Order</h2></mid>';
-assert.deepEqual(engine.scanConcepts(notes).map((item) => [item.localMid, item.title]), [['C1', 'Case Matrix'], ['C2', 'Order']]);
-const compiled = MKML.compile('<mid = c1><h2>Case Matrix</h2><qn all><Qn><mid = PN.C1/PN.C2><gap = Missing Order><text = Prompt><Options><A = One><B = Two></Options><answer = A></Qn></qn all></mid>');
-assert.match(compiled, /class="mkml-mid-concept" data-mid="C1"/);
-assert.match(compiled, /class="mkml-question-mid">PN\.C1\/PN\.C2/);
-assert.match(compiled, /class="mkml-question-gap">GAP · Missing Order/);
-assert.match(MKML.compile('<qn all><Qn><type = sentence improvement><text = Prompt><Options><A = One><B = Two></Options><answer = A></Qn></qn all>'), /class="mkml-question-type">SENTENCE IMPROVEMENT/);
-assert.doesNotMatch(compiled, /<mid\s*=|<gap\s*=/i);
-console.log('Question Index tests passed: normalization, parsing, validation, wrapper scan, badge rendering, readiness, and unmapped gaps.');
+
+assert.equal(parsed[1].target, '');
+assert.equal(parsed[1].inferredTarget, 'QA-TRG-BS-FR');
+assert.equal(parsed[1].hasTu, true);
+assert.equal(parsed[1].isCovered, false);
+assert.deepEqual(parsed[1].stepIds, ['QA-TRG-BS-FR-MC1', 'Tu']);
+assert.equal(parsed[1].gap, 'Sec-Tan Identity');
+assert.deepEqual(engine.validateQuestion(parsed[1]), []);
+
+// Missing steps fails validation
+const untagged = engine.parseQuestionBlocks('<Qn><text = No steps><Options><A = 1><B = 2></Options><answer = A></Qn>')[0];
+assert.ok(engine.validateQuestion(untagged).some((m) => m.includes('step')));
+
+// 3. Exact 100-PYQ coverage rule: 5 questions with even 1 `Tu` step => 95% coverage!
+const hundredPyqParts = [];
+for (let i = 1; i <= 95; i++) {
+  hundredPyqParts.push(
+    `<Qn><target == QA-TRG-BS-FR><text = Q${i}><Options><A = 1><B = 2></Options><answer = A><explanation><step 1 - QA-TRG-BS-FR-MC1>Ratio</step 1><step 2 - TG>Simplify</step 2></explanation></Qn>`
+  );
+}
+for (let i = 96; i <= 100; i++) {
+  hundredPyqParts.push(
+    `<Qn><target == QA-TRG-BS-FR><gap = Missing Identity><text = Q${i}><Options><A = 1><B = 2></Options><answer = A><explanation><step 1 - QA-TRG-BS-FR-MC1>Known part</step 1><step 2 - Tu>Unknown step</step 2></explanation></Qn>`
+  );
+}
+const batch100 = engine.calculatePastedBatchCompletion(hundredPyqParts.join('\n'));
+assert.equal(batch100.total, 100);
+assert.equal(batch100.completed, 95);
+assert.equal(batch100.tuQuestions, 5);
+assert.equal(batch100.unmapped, 5);
+assert.equal(batch100.completion, 95);
+assert.equal(batch100.byStepId.Tu.questionCount, 5);
+assert.equal(batch100.byStepId['QA-TRG-BS-FR-MC1'].questionCount, 100);
+assert.equal(batch100.tuGaps[0].label, 'Missing Identity');
+assert.equal(batch100.tuGaps[0].count, 5);
+
+// 4. Coverage helper & Tu gap aggregation
+assert.deepEqual(engine.calculateStepCoverage(0, 0), { label: 'N/A (0 Questions)', percent: null, covered: 0, uncovered: 0, total: 0 });
+assert.deepEqual(engine.calculateStepCoverage(95, 5), { label: '95%', percent: 95, covered: 95, uncovered: 5, total: 100 });
+assert.deepEqual(engine.tuGapsByFrequency(parsed), [{ label: 'Sec-Tan Identity', count: 1 }]);
+
+// 5. 5-tier hierarchy scanner (no MID required)
+const hierarchyNote = `
+<Domain == QA, name = Quantitative Aptitude>
+<Chapter == QA-TRG, name = Trigonometry>
+<Subtopic == QA-TRG-BS, name = Basics>
+  <Concept == QA-TRG-BS-FR, name = Fundamental Ratios>
+    <MC == QA-TRG-BS-FR-MC1, name = Right-Triangle Ratios></MC>
+    <MC == QA-TRG-BS-FR-MC2, name = Triplets></MC>
+  </Concept>
+</Subtopic>`;
+const scanned = engine.scanHierarchyBlocks(hierarchyNote);
+assert.equal(scanned.domain.id, 'QA');
+assert.equal(scanned.chapter.id, 'QA-TRG');
+assert.equal(scanned.subtopics.length, 1);
+assert.equal(scanned.concepts.length, 1);
+assert.equal(scanned.microConcepts.length, 2);
+
+// 6. MKML compilation of Tu steps + full MKML inside steps
+const compiledTu = MKML.compile(`<qn all>${sampleBatch}</qn all>`);
+assert.match(compiledTu, /mkml-exp-step-id is-tu/);
+assert.match(compiledTu, /mkml-math/);
+assert.match(compiledTu, /QA-TRG-BS-FR-MC1/);
+assert.doesNotMatch(compiledTu, /mkml-question-mid/);
+
+// 7. Question Index client must never use iframe-blocked window.confirm/alert and must emit routing status
+const fs = require('node:fs');
+const path = require('node:path');
+const qiClientSource = fs.readFileSync(path.join(__dirname, '..', 'public', 'question-index.js'), 'utf8');
+assert.doesNotMatch(qiClientSource, /window\.(confirm|alert|prompt)\s*\(/);
+assert.match(qiClientSource, /angles:routing-status/);
+assert.match(qiClientSource, /angles:storage-updated/);
+
+console.log('Question Index (Permanent Base IDs, <target == ...> & Tu) tests passed.');

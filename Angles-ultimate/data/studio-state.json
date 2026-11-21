@@ -1,0 +1,603 @@
+{
+  "version": 4,
+  "savedAt": "2026-11-21T09:23:56.311Z",
+  "activeChapterKey": "TRG",
+  "ledgers": {
+    "TRG": {
+      "chapterCode": "TRG",
+      "chapterName": "Trigonometry",
+      "evaluationDate": "19/11/2026",
+      "timing": {
+        "fastLimit": 45,
+        "mediumLimit": 75,
+        "slowLimit": 110,
+        "locked": true
+      },
+      "concepts": {
+        "BS-FR": {
+          "QA-TRG-BS-FR-1": [
+            [
+              "C",
+              28,
+              1,
+              2,
+              "A"
+            ],
+            [
+              "C",
+              22,
+              1,
+              2,
+              "A"
+            ]
+          ],
+          "QA-TRG-BS-FR-2": [
+            [
+              "C",
+              38,
+              1,
+              2,
+              "B"
+            ],
+            [
+              "C",
+              31,
+              1,
+              2,
+              "B"
+            ]
+          ],
+          "QA-TRG-BS-FR-3": [
+            [
+              "C",
+              62,
+              1,
+              1,
+              "B"
+            ],
+            [
+              "C",
+              41,
+              1,
+              2,
+              "B"
+            ]
+          ],
+          "QA-TRG-BS-FR-4": [
+            [
+              "W",
+              68,
+              -0.5,
+              0,
+              "D"
+            ],
+            [
+              "C",
+              44,
+              1,
+              2,
+              "A"
+            ]
+          ],
+          "QA-TRG-BS-FR-5": [
+            [
+              "C",
+              30,
+              1,
+              2,
+              "C"
+            ],
+            [
+              "C",
+              25,
+              1,
+              2,
+              "C"
+            ]
+          ],
+          "QA-TRG-BS-FR-6": [
+            [
+              "C",
+              35,
+              1,
+              2,
+              "B"
+            ],
+            [
+              "C",
+              29,
+              1,
+              2,
+              "B"
+            ]
+          ],
+          "QA-TRG-BS-FR-7": [
+            [
+              "C",
+              33,
+              1,
+              2,
+              "C"
+            ],
+            [
+              "C",
+              27,
+              1,
+              2,
+              "C"
+            ]
+          ],
+          "QA-TRG-BS-FR-8": [
+            [
+              "C",
+              42,
+              1,
+              2,
+              "A"
+            ],
+            [
+              "C",
+              36,
+              1,
+              2,
+              "A"
+            ]
+          ],
+          "QA-TRG-BS-FR-9": [
+            [
+              "C",
+              58,
+              1,
+              1,
+              "B"
+            ],
+            [
+              "C",
+              43,
+              1,
+              2,
+              "B"
+            ]
+          ],
+          "QA-TRG-BS-FR-10": [
+            [
+              "C",
+              64,
+              1,
+              1,
+              "B"
+            ],
+            [
+              "C",
+              40,
+              1,
+              2,
+              "B"
+            ]
+          ],
+          "QA-TRG-BS-FR-11": [
+            [
+              "C",
+              34,
+              1,
+              2,
+              "B"
+            ],
+            [
+              "C",
+              26,
+              1,
+              2,
+              "B"
+            ]
+          ],
+          "QA-TRG-BS-FR-12": [
+            [
+              "W",
+              74,
+              -0.5,
+              0,
+              "A"
+            ],
+            [
+              "C",
+              52,
+              1,
+              1,
+              "B"
+            ]
+          ],
+          "QA-TRG-BS-FR-13": [
+            [
+              "C",
+              82,
+              1,
+              0.5,
+              "A"
+            ],
+            [
+              "C",
+              65,
+              1,
+              1,
+              "A"
+            ]
+          ],
+          "QA-TRG-BS-FR-14": [
+            [
+              "W",
+              85,
+              -0.5,
+              0,
+              "A"
+            ],
+            [
+              "W",
+              70,
+              -0.5,
+              0,
+              "C"
+            ]
+          ],
+          "QA-TRG-BS-FR-15": [
+            [
+              "C",
+              71,
+              1,
+              1,
+              "A"
+            ],
+            [
+              "C",
+              55,
+              1,
+              1,
+              "A"
+            ]
+          ],
+          "QA-TRG-BS-FR-16": [
+            [
+              "C",
+              39,
+              1,
+              2,
+              "C"
+            ],
+            [
+              "C",
+              32,
+              1,
+              2,
+              "C"
+            ]
+          ],
+          "QA-TRG-BS-FR-17": [
+            [
+              "W",
+              78,
+              -0.5,
+              0,
+              "B"
+            ],
+            [
+              "W",
+              66,
+              -0.5,
+              0,
+              "B"
+            ]
+          ],
+          "QA-TRG-BS-FR-18": [
+            [
+              "C",
+              69,
+              1,
+              1,
+              "A"
+            ],
+            [
+              "W",
+              72,
+              -0.5,
+              0,
+              "B"
+            ]
+          ],
+          "QA-TRG-BS-FR-19": [
+            [
+              "C",
+              60,
+              1,
+              1,
+              "A"
+            ],
+            [
+              "C",
+              44,
+              1,
+              2,
+              "A"
+            ]
+          ],
+          "QA-TRG-BS-FR-20": [
+            [
+              "S",
+              40,
+              -0.2,
+              0,
+              "-"
+            ],
+            [
+              "W",
+              76,
+              -0.5,
+              0,
+              "C"
+            ]
+          ],
+          "QA-TRG-BS-FR-21": [
+            [
+              "C",
+              73,
+              1,
+              1,
+              "A"
+            ],
+            [
+              "S",
+              35,
+              -0.2,
+              0,
+              "-"
+            ]
+          ],
+          "QA-TRG-BS-FR-22": [],
+          "QA-TRG-BS-FR-23": [],
+          "QA-TRG-BS-FR-24": []
+        }
+      }
+    },
+    "PC": {
+      "chapterCode": "PC",
+      "chapterName": "Phrases and Clauses",
+      "evaluationDate": "20/11/2026",
+      "timing": {
+        "fastLimit": 30,
+        "mediumLimit": 60,
+        "slowLimit": 90,
+        "locked": false
+      },
+      "concepts": {}
+    },
+    "TE": {
+      "chapterCode": "TE",
+      "chapterName": "Tenses",
+      "evaluationDate": "20/11/2026",
+      "timing": {
+        "fastLimit": 30,
+        "mediumLimit": 60,
+        "slowLimit": 90,
+        "locked": false
+      },
+      "concepts": {}
+    },
+    "VB": {
+      "chapterCode": "VB",
+      "chapterName": "Verb",
+      "evaluationDate": "20/11/2026",
+      "timing": {
+        "fastLimit": 30,
+        "mediumLimit": 60,
+        "slowLimit": 90,
+        "locked": false
+      },
+      "concepts": {}
+    },
+    "PN": {
+      "chapterCode": "PN",
+      "chapterName": "Pronoun New",
+      "evaluationDate": "20/11/2026",
+      "timing": {
+        "fastLimit": 30,
+        "mediumLimit": 60,
+        "slowLimit": 90,
+        "locked": false
+      },
+      "concepts": {}
+    },
+    "SVA": {
+      "chapterCode": "SVA",
+      "chapterName": "Subject-Verb Agreement",
+      "evaluationDate": "20/11/2026",
+      "timing": {
+        "fastLimit": 30,
+        "mediumLimit": 60,
+        "slowLimit": 90,
+        "locked": false
+      },
+      "concepts": {}
+    }
+  },
+  "domains": [
+    {
+      "id": "dom-qa",
+      "name": "Quantitative Aptitude",
+      "code": "QA"
+    },
+    {
+      "id": "dom-eng",
+      "name": "English Language",
+      "code": "Eng"
+    },
+    {
+      "id": "dom-tst",
+      "name": "Testing",
+      "code": "TST",
+      "isTesting": true
+    }
+  ],
+  "chapters": [
+    {
+      "id": "ch-trg",
+      "name": "Trigonometry",
+      "code": "TRG",
+      "domainCode": "QA",
+      "folderName": "Trigonometry"
+    },
+    {
+      "id": "ch-pc",
+      "name": "Phrases and Clauses",
+      "code": "PC",
+      "domainCode": "Eng",
+      "folderName": "Phrases and clauses"
+    },
+    {
+      "id": "ch-te",
+      "name": "Tenses",
+      "code": "TE",
+      "domainCode": "Eng",
+      "folderName": "Tenses"
+    },
+    {
+      "id": "ch-vb",
+      "name": "Verb",
+      "code": "VB",
+      "domainCode": "Eng",
+      "folderName": "Verb"
+    },
+    {
+      "id": "ch-pn",
+      "name": "Pronoun New",
+      "code": "PN",
+      "domainCode": "Eng",
+      "folderName": "Pronoun new"
+    },
+    {
+      "id": "ch-sva",
+      "name": "Subject-Verb Agreement",
+      "code": "SVA",
+      "domainCode": "Eng",
+      "folderName": "Subject-Verb Agreement"
+    },
+    {
+      "id": "ch-bs",
+      "name": "Basics",
+      "code": "BS",
+      "domainCode": "TST",
+      "folderName": "Basics"
+    },
+    {
+      "id": "ch-bc",
+      "name": "Basic",
+      "code": "BC",
+      "domainCode": "TST",
+      "folderName": "Basic"
+    },
+    {
+      "id": "ch-pn-old",
+      "name": "Pronoun (Legacy)",
+      "code": "PN_OLD",
+      "domainCode": "TST",
+      "folderName": "Pronoun"
+    }
+  ],
+  "stepIdOverrides": {},
+  "stepsByQid": {},
+  "testSessions": [
+    {
+      "id": "test-trg-1",
+      "label": "test id(1) — TRG Basics FR (23 Qs)",
+      "chapterCode": "TRG",
+      "questionUniqueIds": [
+        "QA-TRG-BS-FR-1",
+        "QA-TRG-BS-FR-2",
+        "QA-TRG-BS-FR-3",
+        "QA-TRG-BS-FR-4",
+        "QA-TRG-BS-FR-5",
+        "QA-TRG-BS-FR-6",
+        "QA-TRG-BS-FR-7",
+        "QA-TRG-BS-FR-8",
+        "QA-TRG-BS-FR-9",
+        "QA-TRG-BS-FR-10",
+        "QA-TRG-BS-FR-11",
+        "QA-TRG-BS-FR-12",
+        "QA-TRG-BS-FR-13",
+        "QA-TRG-BS-FR-14",
+        "QA-TRG-BS-FR-15",
+        "QA-TRG-BS-FR-16",
+        "QA-TRG-BS-FR-17",
+        "QA-TRG-BS-FR-18",
+        "QA-TRG-BS-FR-19",
+        "QA-TRG-BS-FR-20",
+        "QA-TRG-BS-FR-21",
+        "QA-TRG-BS-FR-22",
+        "QA-TRG-BS-FR-23"
+      ],
+      "createdAt": "19/11/2026"
+    },
+    {
+      "id": "test-trg-2",
+      "label": "test id(2) — TRG Dual-Angle & Triplets (10 Qs)",
+      "chapterCode": "TRG",
+      "questionUniqueIds": [
+        "QA-TRG-BS-FR-1",
+        "QA-TRG-BS-FR-2",
+        "QA-TRG-BS-FR-4",
+        "QA-TRG-BS-FR-12",
+        "QA-TRG-BS-FR-16",
+        "QA-TRG-BS-FR-17",
+        "QA-TRG-BS-FR-18",
+        "QA-TRG-BS-FR-19",
+        "QA-TRG-BS-FR-20",
+        "QA-TRG-BS-FR-21"
+      ],
+      "createdAt": "19/11/2026"
+    }
+  ],
+  "activeTestSessionId": "test-trg-1",
+  "exams": [
+    {
+      "id": "exam-ssc-chsl",
+      "name": "SSC CHSL",
+      "domains": [
+        {
+          "domainCode": "QA",
+          "percentage": 50,
+          "chapters": [
+            {
+              "chapterCode": "TRG",
+              "percentage": 100
+            }
+          ]
+        },
+        {
+          "domainCode": "Eng",
+          "percentage": 50,
+          "chapters": [
+            {
+              "chapterCode": "PC",
+              "percentage": 20
+            },
+            {
+              "chapterCode": "TE",
+              "percentage": 20
+            },
+            {
+              "chapterCode": "VB",
+              "percentage": 20
+            },
+            {
+              "chapterCode": "PN",
+              "percentage": 20
+            },
+            {
+              "chapterCode": "SVA",
+              "percentage": 20
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "selectedExamId": "exam-ssc-chsl"
+}

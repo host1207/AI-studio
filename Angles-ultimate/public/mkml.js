@@ -415,29 +415,85 @@
     return { answer: match ? (match[1] || match[2]).toLowerCase() : '', source: match ? source.slice(0, match.index) + source.slice(match.index + match[0].length) : source };
   }
 
+  function parseStepIdList(rawIds) {
+    const cleaned = String(rawIds || '').replace(/\/\/[\s\S]*$/, '').trim();
+    if (!cleaned) return [];
+    const seen = new Set();
+    const ids = [];
+    for (const part of cleaned.split(/[,/]+/)) {
+      const upper = part.trim().toUpperCase();
+      const id = upper === 'TU' ? 'Tu' : upper;
+      if (id && !seen.has(id.toUpperCase())) {
+        seen.add(id.toUpperCase());
+        ids.push(id);
+      }
+    }
+    return ids;
+  }
+
+  function parseExplanationSteps(source) {
+    const raw = String(source || '');
+    const stepPattern = /<step\s+(\d+)\s*-\s*([^>]+)>([\s\S]*?)<\/step(?:\s+\1)?\s*>/gi;
+    const steps = [];
+    let match;
+    while ((match = stepPattern.exec(raw)) !== null) {
+      const stepNumber = Number(match[1]);
+      const stepIds = parseStepIdList(match[2]);
+      const body = match[3].trim();
+      steps.push({
+        stepNumber,
+        stepIds,
+        stepId: stepIds.join(', '),
+        body,
+        start: match.index,
+        end: match.index + match[0].length
+      });
+    }
+    return steps;
+  }
+
+  function takeExplanation(source) {
+    const pairedPattern = /<explanation\s*>([\s\S]*?)<\/explanation\s*>/i;
+    const pairedMatch = pairedPattern.exec(source);
+    if (pairedMatch) {
+      return {
+        value: pairedMatch[1].trim(),
+        source: source.slice(0, pairedMatch.index) + source.slice(pairedMatch.index + pairedMatch[0].length)
+      };
+    }
+    return takeField(source, 'explanation', /<\/Qn\s*>|<\/qn\s+all\s*>/i, true);
+  }
+
   function compileQuestion(body, mode) {
     const idMatch = /<id\s*={1,2}\s*([^>]+)>/i.exec(body);
+    const targetMatch = /<target\s*={1,2}\s*([^>]+)>/i.exec(body);
     const midMatch = /<mid\s*={1,2}\s*([^>]+)>/i.exec(body);
     const gapMatch = /<gap\s*={1,2}\s*([^>]+)>/i.exec(body);
     const typeMatch = /<type\s*={1,2}\s*([^>]+)>/i.exec(body);
     const stepMatch = /<step\s*[-_]?id\s*={1,2}\s*([^>]+)>/i.exec(body);
     const idVal = idMatch ? idMatch[1].trim() : '';
+    const targetVal = targetMatch ? targetMatch[1].trim() : '';
     const midVal = midMatch ? midMatch[1].trim() : '';
     const typeVal = typeMatch ? typeMatch[1].trim().replace(/\s+/g, ' ').toUpperCase() : '';
     const gapVal = gapMatch ? gapMatch[1].trim() : '';
-    const stepVal = stepMatch ? stepMatch[1].trim().toUpperCase() : '';
+    const explicitStepVal = stepMatch ? stepMatch[1].trim().toUpperCase() : '';
+    body = body.replace(/<id\s*={1,2}\s*[^>]+>|<target\s*={1,2}\s*[^>]+>|<mid\s*={1,2}\s*[^>]+>|<gap\s*={1,2}\s*[^>]+>|<type\s*={1,2}\s*[^>]+>|<step\s*[-_]?id\s*={1,2}\s*[^>]+>/gi, '');
+    const answerResult = takeAnswer(body);
+    const explanationResult = takeExplanation(answerResult.source);
+    const parsedSteps = parseExplanationSteps(explanationResult.value);
+    const derivedStepIds = parsedSteps.length
+      ? Array.from(new Set(parsedSteps.flatMap((step) => step.stepIds)))
+      : [];
+    const hasTuStep = derivedStepIds.some((id) => id.toUpperCase() === 'TU');
+    const stepVal = derivedStepIds.length ? derivedStepIds.join(' · ') : explicitStepVal;
     const badges = [
       idVal ? `<span class="mkml-question-id">${escapeHtml(idVal)}</span>` : '',
       typeVal ? `<span class="mkml-question-type">${escapeHtml(typeVal)}</span>` : '',
-      midVal ? `<span class="mkml-question-mid">${escapeHtml(midVal)}</span>` : '',
-      stepVal ? `<span class="mkml-question-step" data-step-id="${escapeHtml(stepVal)}">STEP · ${escapeHtml(stepVal)}</span>` : '',
+      stepVal ? `<span class="mkml-question-step${hasTuStep ? ' is-tu' : ''}" data-step-id="${escapeHtml(stepVal)}">STEPS · ${escapeHtml(stepVal)}</span>` : '',
       gapVal ? `<span class="mkml-question-gap">GAP · ${escapeHtml(gapVal)}</span>` : ''
     ].filter(Boolean).join('');
-    body = body.replace(/<id\s*={1,2}\s*[^>]+>|<mid\s*={1,2}\s*[^>]+>|<gap\s*={1,2}\s*[^>]+>|<type\s*={1,2}\s*[^>]+>|<step\s*[-_]?id\s*={1,2}\s*[^>]+>/gi, '');
-    const answerResult = takeAnswer(body);
-    const explanationResult = takeField(answerResult.source, 'explanation', /<\/Qn\s*>|<\/qn\s+all\s*>/i, true);
     let remaining = explanationResult.source.replace(/<\/?Options\s*>/gi, '');
-    const promptResult = takeField(remaining, 'text', /<(?:Options)\s*>|<[A-D](?:\s*=|\s+)|<(?:answer|ans|explanation)\s*=/i);
+    const promptResult = takeField(remaining, 'text', /<(?:Options)\s*>|<[A-D](?:\s*=|\s+)|<(?:answer|ans)\s*=|<explanation(?:\s*=|\s*>)/i);
     remaining = promptResult.source;
     const options = [];
     const marker = /<([A-D])(?:\s*=\s*|\s+)/gi;
@@ -445,7 +501,7 @@
     boundaries.forEach((entry, index) => {
       const start = entry.index + entry[0].length;
       const nextBoundary = index + 1 < boundaries.length ? boundaries[index + 1].index : remaining.length;
-      const structural = /<(?:answer|ans|explanation)\s*=|<\/Options\s*>|<\/Qn\s*>|<\/qn\s+all\s*>/i.exec(remaining.slice(start, nextBoundary));
+      const structural = /<(?:answer|ans)\s*=|<explanation(?:\s*=|\s*>)|<\/Options\s*>|<\/Qn\s*>|<\/qn\s+all\s*>/i.exec(remaining.slice(start, nextBoundary));
       const end = structural ? start + structural.index : nextBoundary;
       const text = trimTagBoundary(remaining.slice(start, end));
       options.push(`<button type="button" class="answer-option" data-answer="${entry[1].toLowerCase()}"><span class="option-letter">${entry[1].toUpperCase()}</span>${compileInline(text)}</button>`);
@@ -453,9 +509,11 @@
     const details = explanationResult.value ? `<div class="explanation">${compileQuestionExplanation(explanationResult.value)}</div>` : '<div class="explanation"></div>';
     const normalizedMode = /^(exam|serious)$/i.test(mode) ? 'exam' : 'normal';
     const extraAttrs = [
+      targetVal ? ` data-target="${escapeHtml(targetVal)}"` : '',
       midVal ? ` data-mid="${escapeHtml(midVal)}"` : '',
       typeVal ? ` data-type="${escapeHtml(typeVal)}"` : '',
-      stepVal ? ` data-step-id="${escapeHtml(stepVal)}"` : ''
+      stepVal ? ` data-step-id="${escapeHtml(stepVal)}"` : '',
+      derivedStepIds.length ? ` data-step-ids="${escapeHtml(derivedStepIds.join(','))}"` : ''
     ].join('');
     return `<section class="question-card" data-mode="${normalizedMode}" data-answer="${escapeHtml(answerResult.answer)}"${extraAttrs}>${badges ? `<div class="mkml-question-badges">${badges}</div>` : ''}<div class="question-prompt">${compileInline(promptResult.value)}</div><div class="quiz-options">${options.join('')}</div><button type="button" class="quiz-explanation" hidden>Explanation</button>${details}<div class="question-result" aria-live="polite"></div></section>`;
   }
@@ -497,6 +555,71 @@
       .replace(/^[\s,]+|[\s,]+$/g, '')
       .trim();
     return { points, labelText };
+  }
+
+  function parseArcPoints(source) {
+    const value = String(source || '').trim();
+    const pair = String.raw`\(\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*\)`;
+    const fullCheck = new RegExp(`^\\s*${pair}(?:\\s*,\\s*|\\s+)${pair}\\s*$`);
+    if (!fullCheck.test(value)) return null;
+    const matches = [...value.matchAll(new RegExp(pair, 'g'))];
+    if (matches.length !== 2) return null;
+    const pts = matches.map((m) => ({ x: Number(m[1]), y: Number(m[2]) }));
+    if (pts.some((p) => !Number.isFinite(p.x) || !Number.isFinite(p.y) || p.x < 1 || p.y < 1)) return null;
+    if (pts[0].x === pts[1].x && pts[0].y === pts[1].y) return null;
+    return pts;
+  }
+
+  // Parses `floating = ±Xmm` or `±Xpx` (bare number defaults to mm). Returns { value, unit, px, css } or null.
+  function parseFloatingOffset(raw, defaultValue = 4, defaultUnit = 'mm') {
+    const text = String(raw || '').trim();
+    if (!text) {
+      const px = defaultUnit === 'mm' ? defaultValue * 3.7795 : defaultValue;
+      return { value: defaultValue, unit: defaultUnit, px, css: `${defaultValue}${defaultUnit}` };
+    }
+    const match = /^([+-]?\d+(?:\.\d+)?)\s*(mm|px)?$/i.exec(text);
+    if (!match) return null;
+    const value = Number(match[1]);
+    if (!Number.isFinite(value)) return null;
+    const unit = (match[2] || 'mm').toLowerCase();
+    const px = unit === 'mm' ? value * 3.7795 : value;
+    return { value, unit, px, css: `${value}${unit}` };
+  }
+
+  function buildLineDTransform(angleDeg, floatingSpec) {
+    const spec = floatingSpec || parseFloatingOffset('', 4, 'mm');
+    const absVal = Math.abs(spec.value);
+    const absCss = `${absVal}${spec.unit}`;
+    if (spec.value < 0) {
+      return `translate(-50%,-50%) rotate(${angleDeg}deg) translateY(calc(50% + ${absCss}))`;
+    }
+    return `translate(-50%,-50%) rotate(${angleDeg}deg) translateY(calc(-50% - ${absCss}))`;
+  }
+
+  function computeArcGeometry(p1, p2, depth = 1, cellWidthPx = 64, rowHeightPx = 32) {
+    const midX = (p1.x + p2.x) / 2;
+    const midY = (p1.y + p2.y) / 2;
+    const vx = (p2.x - p1.x) * cellWidthPx;
+    const vy = (p2.y - p1.y) * rowHeightPx;
+    const len = Math.hypot(vx, vy) || 1;
+    // Unit normal pointing upward for left-to-right horizontal chords
+    const nx = vy / len;
+    const ny = -vx / len;
+    const offsetPx = depth * rowHeightPx;
+    const apexX = midX + (nx * offsetPx) / cellWidthPx;
+    const apexY = midY + (ny * offsetPx) / rowHeightPx;
+    const ctrlX = midX + (2 * nx * offsetPx) / cellWidthPx;
+    const ctrlY = midY + (2 * ny * offsetPx) / rowHeightPx;
+    return {
+      apexX,
+      apexY,
+      ctrlX,
+      ctrlY,
+      nx,
+      ny,
+      maxX: Math.max(p1.x, p2.x, Math.ceil(apexX)),
+      maxY: Math.max(p1.y, p2.y, Math.ceil(apexY))
+    };
   }
 
   function validHexColor(value) { return /^#(?:[\da-f]{3}|[\da-f]{4}|[\da-f]{6}|[\da-f]{8})$/i.test(String(value || '')); }
@@ -581,9 +704,74 @@
     return area !== 0 && !segmentsIntersect(points[0], points[1], points[2], points[3]) && !segmentsIntersect(points[1], points[2], points[3], points[0]);
   }
 
-  function compileQuestionExplanation(source) {
+  function parseEnclavePoints(attributes) {
+    const rawAttr = String(attributes || '').trim();
+    let ptsRaw = readAttribute(rawAttr, 'points');
+    if (!ptsRaw) {
+      const bareMatch = rawAttr.match(/^\s*=\s*([\s\S]+)$/);
+      if (bareMatch) {
+        ptsRaw = bareMatch[1].replace(/\b(?:background-color|bg-color|text-color|color)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '').trim();
+      }
+    }
+    if (!ptsRaw) return null;
+    const normalizedPts = ptsRaw.replace(/\)\s+\(/g, '),(');
+    const twoOrFour = parseGridPoints(normalizedPts, null, 2);
+    if (!twoOrFour) return null;
+    if (twoOrFour.length === 4) return twoOrFour;
+    if (twoOrFour.length === 2) {
+      const [a, b] = twoOrFour;
+      const minX = Math.min(a.x, b.x), maxX = Math.max(a.x, b.x);
+      const minY = Math.min(a.y, b.y), maxY = Math.max(a.y, b.y);
+      if (minX === maxX || minY === maxY) return null;
+      return [{ x: minX, y: minY }, { x: maxX, y: minY }, { x: maxX, y: maxY }, { x: minX, y: maxY }];
+    }
+    return null;
+  }
+
+  function extractEnclaveBlocks(source) {
+    const text = String(source || '');
+    const enclaves = [];
+    let out = '';
+    let cursor = 0;
+    const openRegex = /<enclave\b([^>]*)>/gi;
+    let match;
+    while ((match = openRegex.exec(text)) !== null) {
+      const openStart = match.index;
+      const openEnd = openStart + match[0].length;
+      const rawAttrs = match[1] || '';
+      const isSelfClosing = /\/\s*$/.test(rawAttrs);
+      const attrs = isSelfClosing ? rawAttrs.replace(/\/\s*$/, '') : rawAttrs;
+      out += text.slice(cursor, openStart);
+      if (isSelfClosing) {
+        enclaves.push({ attributes: attrs, body: '' });
+        cursor = openEnd;
+        continue;
+      }
+      const closeRegex = /<\/enclave\s*>/gi;
+      closeRegex.lastIndex = openEnd;
+      const closeMatch = closeRegex.exec(text);
+      const nextOpenRegex = /<enclave\b/gi;
+      nextOpenRegex.lastIndex = openEnd;
+      const nextOpenMatch = nextOpenRegex.exec(text);
+      if (closeMatch && (!nextOpenMatch || closeMatch.index < nextOpenMatch.index)) {
+        const body = text.slice(openEnd, closeMatch.index);
+        enclaves.push({ attributes: attrs, body });
+        cursor = closeMatch.index + closeMatch[0].length;
+        openRegex.lastIndex = cursor;
+      } else {
+        // Bare <enclave = (x1,y1),(x2,y2),(x3,y3),(x4,y4)> without closing tag
+        enclaves.push({ attributes: attrs, body: '' });
+        cursor = openEnd;
+      }
+    }
+    out += text.slice(cursor);
+    return { stripped: out, enclaves };
+  }
+
+  function compileExplanationFragment(source) {
     const warnings = [];
     const lines = [];
+    const arcs = [];
     const comments = [];
     const maskedComments = String(source || '').replace(/<!--[\s\S]*?-->/g, (comment) => {
       const token = `<!--__MKML_EXP_COMMENT_${comments.length}__-->`;
@@ -591,7 +779,35 @@
       return token;
     });
     const restoreComments = (text) => String(text).replace(/<!--__MKML_EXP_COMMENT_(\d+)__-->/g, (_, idx) => comments[Number(idx)] || '');
-    const raw = normalizeSelfClosingLineD(maskedComments);
+    const rawWithNormalizedLineD = normalizeSelfClosingLineD(maskedComments);
+    const extractedEnclaves = extractEnclaveBlocks(rawWithNormalizedLineD);
+    let activeEnclave = null;
+    let enclaveInnerGeometry = '';
+    if (extractedEnclaves.enclaves.length > 1) {
+      warnings.push(warnQuestionGraph('<enclave>', 'only one <enclave> is allowed per step; extra enclaves were skipped'));
+    }
+    if (extractedEnclaves.enclaves.length >= 1) {
+      const firstEnc = extractedEnclaves.enclaves[0];
+      const encPoints = parseEnclavePoints(firstEnc.attributes);
+      const encBg = readAnyAttribute(firstEnc.attributes, ['bg-color', 'background-color']);
+      const encColor = readAnyAttribute(firstEnc.attributes, ['text-color', 'color']);
+      if (!validFlowPolygon(encPoints)) {
+        warnings.push(warnQuestionGraph('<enclave>', 'points must form a valid 4-point perimeter quadrilateral or 2-point rectangle'));
+      } else if ((encBg && !validHexColor(encBg)) || (encColor && !validHexColor(encColor))) {
+        warnings.push(warnQuestionGraph('<enclave>', 'background-color/bg-color and color/text-color must be 3- or 6-digit hex values'));
+      } else {
+        activeEnclave = {
+          points: encPoints,
+          background: encBg || '#FFFFFF',
+          color: encColor || '#CBD5E1',
+          rawBody: firstEnc.body || ''
+        };
+        enclaveInnerGeometry = firstEnc.body || '';
+      }
+    }
+    const raw = enclaveInnerGeometry
+      ? `${extractedEnclaves.stripped}\n${enclaveInnerGeometry}`
+      : extractedEnclaves.stripped;
     let geometrySource = raw.replace(/<line\b([^>]*)>([\s\S]*?)<\/line(\s+[md])?\s*>/gi, (_whole, attributes, body, closingMode) => {
       const isModeM = /(?:^|\s)m(?:\s|$)/i.test(attributes);
       const isModeD = /(?:^|\s)d(?:\s|$)/i.test(attributes);
@@ -606,7 +822,12 @@
         if ((lineColor && !validHexColor(lineColor)) || (textColor && !validHexColor(textColor))) {
           warnings.push(warnQuestionGraph(tag, 'line-color and text-color must be 3- or 6-digit hex values')); return '';
         }
-        lines.push({ points: parsed.points, color: lineColor || 'currentColor', textColor: textColor || '#000000', labelText: parsed.labelText, overBox: true, isLineD: true });
+        const floatingRaw = readAttribute(attributes, 'floating');
+        const floating = parseFloatingOffset(floatingRaw, 4, 'mm');
+        if (floatingRaw && !floating) {
+          warnings.push(warnQuestionGraph(tag, 'floating must be a number in mm or px, e.g. floating = 2mm or -3mm')); return '';
+        }
+        lines.push({ points: parsed.points, color: lineColor || 'currentColor', textColor: textColor || '#000000', labelText: parsed.labelText, floating, overBox: true, isLineD: true });
         return '';
       }
       const overBox = isModeM;
@@ -620,9 +841,37 @@
       return '';
     });
 
+    geometrySource = geometrySource.replace(/<arc\b([^>]*?)(?:\/>|>([\s\S]*?)<\/arc(?:\s+m)?\s*>)/gi, (_whole, attributes, body = '') => {
+      const overBox = /(?:^|\s)m(?:\s|$)/i.test(attributes);
+      const tag = overBox ? '<arc m>' : '<arc>';
+      const points = parseArcPoints(readAttribute(attributes, 'points'));
+      if (!points) { warnings.push(warnQuestionGraph(tag, 'points must contain two valid grid points, e.g. points = (2,4),(6,4)')); return ''; }
+      const depthRaw = readAttribute(attributes, 'depth');
+      const depth = depthRaw === '' ? 1 : Number(depthRaw);
+      if (!Number.isFinite(depth)) { warnings.push(warnQuestionGraph(tag, 'depth must be a valid number')); return ''; }
+      const color = readAnyAttribute(attributes, ['line-color', 'color']);
+      const textColor = readAnyAttribute(attributes, ['text-color', 'color']);
+      if ((color && !validHexColor(color)) || (textColor && !validHexColor(textColor))) {
+        warnings.push(warnQuestionGraph(tag, 'color and text-color must be 3- or 6-digit hex values')); return '';
+      }
+      const floatingRaw = readAttribute(attributes, 'floating');
+      const floating = parseFloatingOffset(floatingRaw, 1.5, 'mm');
+      if (floatingRaw && !floating) {
+        warnings.push(warnQuestionGraph(tag, 'floating must be a number in mm or px')); return '';
+      }
+      arcs.push({ points, depth, color: color || 'currentColor', textColor: textColor || color || '#000000', labelText: String(body || '').trim(), floating, overBox });
+      return '';
+    });
+
     const originalBoxBlocks = scanQuestionBoxBlocks(geometrySource);
     const topLevelBoxes = originalBoxBlocks.filter((block) => !block.parent);
-    const cropBlock = topLevelBoxes[0] && !topLevelBoxes[0].isBoxW ? topLevelBoxes[0] : null;
+    const firstTop = topLevelBoxes[0] || null;
+    const hasNestedChildBox = firstTop ? originalBoxBlocks.some((b) => b.parent === firstTop) : false;
+    const firstTopBg = firstTop ? readAnyAttribute(firstTop.attributes, ['bg-color', 'background-color']) : '';
+    const firstTopOnlyLinesOrEmpty = firstTop ? !firstTop.body.replace(/<line\b[^>]*>[\s\S]*?<\/line(?:\s+[md])?\s*>/gi, '').trim() : false;
+    const cropBlock = !activeEnclave && firstTop && !firstTop.isBoxW && (hasNestedChildBox || (!firstTopBg && firstTopOnlyLinesOrEmpty))
+      ? firstTop
+      : null;
     let graphSource = cropBlock
       ? geometrySource.slice(0, cropBlock.start) + cropBlock.body + geometrySource.slice(cropBlock.end)
       : geometrySource;
@@ -633,6 +882,35 @@
 
     const boxBlocks = scanQuestionBoxBlocks(graphSource);
     const visibleBoxes = [];
+    if (activeEnclave) {
+      let enclaveTextBody = activeEnclave.rawBody
+        .replace(/<line\b[^>]*>[\s\S]*?<\/line(?:\s+[md])?\s*>/gi, '')
+        .replace(/<arc\b[^>]*?(?:\/>|>[\s\S]*?<\/arc(?:\s+m)?\s*>)/gi, '');
+      const encChildBoxes = scanQuestionBoxBlocks(enclaveTextBody).filter((b) => !b.parent);
+      for (const child of encChildBoxes.slice().sort((a, b) => b.start - a.start)) {
+        enclaveTextBody = enclaveTextBody.slice(0, child.start) + enclaveTextBody.slice(child.end);
+      }
+      visibleBoxes.push({
+        points: activeEnclave.points,
+        body: enclaveTextBody.trim(),
+        isBoxW: false,
+        isEnclave: true,
+        background: activeEnclave.background,
+        color: activeEnclave.color
+      });
+      if (enclaveTextBody.trim()) {
+        // Avoid duplicating enclave's own text both inside the enclave box and outside it
+        const strippedOutside = extractedEnclaves.stripped
+          .replace(/<line\b[^>]*>[\s\S]*?<\/line(?:\s+[md])?\s*>/gi, '')
+          .replace(/<arc\b[^>]*?(?:\/>|>[\s\S]*?<\/arc(?:\s+m)?\s*>)/gi, '');
+        const outTopBoxes = scanQuestionBoxBlocks(strippedOutside).filter((b) => !b.parent);
+        let cleanOutside = strippedOutside;
+        for (const b of outTopBoxes.slice().sort((a, b) => b.start - a.start)) {
+          cleanOutside = cleanOutside.slice(0, b.start) + cleanOutside.slice(b.end);
+        }
+        explanationText = cleanOutside;
+      }
+    }
     for (const block of boxBlocks) {
       const points = parseGridPoints(readAttribute(block.attributes, 'points'), 4, 4);
       const background = readAnyAttribute(block.attributes, ['bg-color', 'background-color']);
@@ -658,15 +936,19 @@
       });
     }
 
-    let cropPoints = null;
-    if (cropBlock) {
+    let cropPoints = activeEnclave ? activeEnclave.points : null;
+    if (!cropPoints && cropBlock) {
       const parsed = parseGridPoints(readAttribute(cropBlock.attributes, 'points'), 4, 4);
       if (validFlowPolygon(parsed)) cropPoints = parsed;
       else warnings.push(warnQuestionGraph('<box>', 'the first outer box is the crop boundary and needs four valid perimeter-ordered points'));
     }
-    const allPoints = [...lines.flatMap((line) => line.points), ...visibleBoxes.flatMap((box) => box.points)];
+    const allPoints = [
+      ...lines.flatMap((line) => line.points),
+      ...arcs.flatMap((arc) => arc.points),
+      ...visibleBoxes.flatMap((box) => box.points)
+    ];
     const cleanExplanationText = restoreComments(explanationText).trim();
-    if (!cropPoints && allPoints.length === 0) return `${compileInline(cleanExplanationText)}${warnings.join('')}`;
+    if (!cropPoints && allPoints.length === 0) return `${compileMarkup(cleanExplanationText)}${warnings.join('')}`;
 
     const minCol = cropPoints ? Math.min(...cropPoints.map((point) => point.x)) : Math.min(...allPoints.map((point) => point.x));
     const maxCol = cropPoints ? Math.max(...cropPoints.map((point) => point.x)) : Math.max(...allPoints.map((point) => point.x));
@@ -681,6 +963,18 @@
     const clipPolygon = clipPoints.map((point) => `${formatPercent((point.x - minCol) / colSpan * 100)}% ${formatPercent((point.y - minRow) / rowSpan * 100)}%`).join(',');
     const normalLines = lines.filter((line) => !line.overBox);
     const overLines = lines.filter((line) => line.overBox);
+    const normalArcs = arcs.filter((arc) => !arc.overBox);
+    const overArcs = arcs.filter((arc) => arc.overBox);
+    const renderQuestionArcPath = (arc) => {
+      const g = computeArcGeometry(arc.points[0], arc.points[1], arc.depth, cellWidth, 32);
+      const x1 = (arc.points[0].x - minCol) * 100;
+      const y1 = (arc.points[0].y - minRow) * 32;
+      const cx = (g.ctrlX - minCol) * 100;
+      const cy = (g.ctrlY - minRow) * 32;
+      const x2 = (arc.points[1].x - minCol) * 100;
+      const y2 = (arc.points[1].y - minRow) * 32;
+      return `<path class="mkml-arc-path" d="M ${formatPercent(x1)},${formatPercent(y1)} Q ${formatPercent(cx)},${formatPercent(cy)} ${formatPercent(x2)},${formatPercent(y2)}" fill="none" stroke="${escapeHtml(arc.color)}" stroke-width="2.5" stroke-linecap="round" vector-effect="non-scaling-stroke"/>`;
+    };
     const boxMarkup = visibleBoxes.map((box) => {
       const boxMinX = Math.min(...box.points.map((point) => point.x)), boxMaxX = Math.max(...box.points.map((point) => point.x));
       const boxMinY = Math.min(...box.points.map((point) => point.y)), boxMaxY = Math.max(...box.points.map((point) => point.y));
@@ -688,9 +982,10 @@
       if (box.isBoxW) {
         const bw = computeBoxWBaseline(box.points);
         const borderStyle = box.background === 'transparent' ? 'border-color:transparent;' : '';
-        return `<div class="mkml-question-graph-box mkml-flow-box-w" style="left:${(boxMinX - minCol) * cellWidth}px;top:${(boxMinY - minRow) * 32}px;width:${Math.max(1, boxMaxX - boxMinX) * cellWidth}px;height:${Math.max(1, boxMaxY - boxMinY) * 32}px;color:${escapeHtml(box.color)}"><div class="mkml-question-graph-shape" style="clip-path:polygon(${polygon});background-color:${escapeHtml(box.background)};color:${escapeHtml(box.color)};${borderStyle}"></div><svg class="mkml-box-w-line" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><line x1="${bw.x1}" y1="${bw.y1}" x2="${bw.x2}" y2="${bw.y2}" stroke="${escapeHtml(box.color)}" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg><div class="mkml-question-graph-content mkml-box-w-text" style="left:${bw.midX}%;top:${bw.midY}%;transform:translate(-50%,-100%) rotate(${bw.angleDeg}deg)">${compileMarkup(restoreComments(box.body))}</div></div>`;
+        return `<div class="mkml-question-graph-box mkml-flow-box-w" style="left:${(boxMinX - minCol) * cellWidth}px;top:${(boxMinY - minRow) * 32}px;width:${Math.max(1, boxMaxX - boxMinX) * cellWidth}px;height:${Math.max(1, boxMaxY - boxMinY) * 32}px;color:${escapeHtml(box.color)}"><div class="mkml-question-graph-shape" style="clip-path:polygon(${polygon});background-color:${escapeHtml(box.background)};color:${escapeHtml(box.color)};${borderStyle}"></div><div class="mkml-question-graph-content mkml-box-w-text" style="left:${bw.midX}%;top:50%;transform:translate(-50%,-50%) rotate(${bw.angleDeg}deg)">${compileMarkup(restoreComments(box.body))}</div></div>`;
       }
-      return `<div class="mkml-question-graph-box" style="left:${(boxMinX - minCol) * cellWidth}px;top:${(boxMinY - minRow) * 32}px;width:${Math.max(1, boxMaxX - boxMinX) * cellWidth}px;height:${Math.max(1, boxMaxY - boxMinY) * 32}px;color:${escapeHtml(box.color)}"><div class="mkml-question-graph-shape" style="clip-path:polygon(${polygon});background-color:${escapeHtml(box.background)};color:${escapeHtml(box.color)}"></div><div class="mkml-question-graph-content">${compileMarkup(restoreComments(box.body))}</div></div>`;
+      const enclaveClass = box.isEnclave ? ' mkml-enclave-frame' : '';
+      return `<div class="mkml-question-graph-box${enclaveClass}" style="left:${(boxMinX - minCol) * cellWidth}px;top:${(boxMinY - minRow) * 32}px;width:${Math.max(1, boxMaxX - boxMinX) * cellWidth}px;height:${Math.max(1, boxMaxY - boxMinY) * 32}px;color:${escapeHtml(box.color)}"><div class="mkml-question-graph-shape" style="clip-path:polygon(${polygon});background-color:${escapeHtml(box.background)};color:${escapeHtml(box.color)}"></div><div class="mkml-question-graph-content">${compileMarkup(restoreComments(box.body))}</div></div>`;
     }).join('');
     const lineDLabelsMarkup = overLines.filter((line) => line.isLineD && line.labelText).map((line) => {
       const midIdx = Math.floor((line.points.length - 1) / 2);
@@ -699,10 +994,54 @@
       const midX = (((pA.x + pB.x) / 2) - minCol) * cellWidth;
       const midY = (((pA.y + pB.y) / 2) - minRow) * 32;
       const angleDeg = computeUprightAngleDeg(pA, pB, cellWidth, 32);
-      return `<div class="mkml-line-d-label" style="left:${midX}px;top:${midY}px;color:${escapeHtml(line.textColor || '#000000')};transform:translate(-50%,-100%) rotate(${angleDeg}deg)">${compileInline(line.labelText)}</div>`;
+      const transform = buildLineDTransform(angleDeg, line.floating);
+      return `<div class="mkml-line-d-label" data-floating="${escapeHtml(line.floating?.css || '4mm')}" style="left:${midX}px;top:${midY}px;color:${escapeHtml(line.textColor || '#000000')};transform:${transform}">${compileInline(line.labelText)}</div>`;
     }).join('');
-    const diagram = `<div class="mkml-question-diagram-scroll"><div class="mkml-question-diagram-window" role="img" aria-label="Question-specific grid diagram" style="width:${colSpan * cellWidth}px;height:${rowSpan * 32}px;clip-path:polygon(${clipPolygon})"><svg class="mkml-question-diagram-lines" viewBox="0 0 ${viewWidth} ${viewHeight}" preserveAspectRatio="none" aria-hidden="true">${normalLines.map((line) => `<polyline points="${line.points.map((point) => `${(point.x - minCol) * 100},${(point.y - minRow) * 32}`).join(' ')}" fill="none" stroke="${escapeHtml(line.color)}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`).join('')}</svg>${boxMarkup}<svg class="mkml-question-diagram-over-lines" viewBox="0 0 ${viewWidth} ${viewHeight}" preserveAspectRatio="none" aria-hidden="true">${overLines.map((line) => `<polyline points="${line.points.map((point) => `${(point.x - minCol) * 100},${(point.y - minRow) * 32}`).join(' ')}" fill="none" stroke="${escapeHtml(line.color)}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`).join('')}</svg>${lineDLabelsMarkup}</div></div>`;
-    return `${compileInline(cleanExplanationText)}${diagram}${warnings.join('')}`;
+    const arcLabelsMarkup = arcs.filter((arc) => arc.labelText).map((arc) => {
+      const g = computeArcGeometry(arc.points[0], arc.points[1], arc.depth, cellWidth, 32);
+      const dir = arc.depth < 0 ? -1 : 1;
+      const shiftPx = (arc.floating ? arc.floating.px : 5.67) * dir;
+      const leftPx = (g.apexX - minCol) * cellWidth + g.nx * shiftPx;
+      const topPx = (g.apexY - minRow) * 32 + g.ny * shiftPx;
+      return `<div class="mkml-arc-label" style="left:${formatPercent(leftPx)}px;top:${formatPercent(topPx)}px;color:${escapeHtml(arc.textColor || '#000000')};transform:translate(-50%,-50%)">${compileInline(arc.labelText)}</div>`;
+    }).join('');
+    const enclaveAttr = activeEnclave ? ' data-enclave="true"' : '';
+    const diagram = `<div class="mkml-question-diagram-scroll"><div class="mkml-question-diagram-window${activeEnclave ? ' is-enclave' : ''}"${enclaveAttr} role="img" aria-label="Question-specific grid diagram" style="width:${colSpan * cellWidth}px;height:${rowSpan * 32}px;clip-path:polygon(${clipPolygon})"><svg class="mkml-question-diagram-lines" viewBox="0 0 ${viewWidth} ${viewHeight}" preserveAspectRatio="none" aria-hidden="true">${normalLines.map((line) => `<polyline points="${line.points.map((point) => `${(point.x - minCol) * 100},${(point.y - minRow) * 32}`).join(' ')}" fill="none" stroke="${escapeHtml(line.color)}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`).join('')}${normalArcs.map(renderQuestionArcPath).join('')}</svg>${boxMarkup}<svg class="mkml-question-diagram-over-lines" viewBox="0 0 ${viewWidth} ${viewHeight}" preserveAspectRatio="none" aria-hidden="true">${overLines.map((line) => `<polyline points="${line.points.map((point) => `${(point.x - minCol) * 100},${(point.y - minRow) * 32}`).join(' ')}" fill="none" stroke="${escapeHtml(line.color)}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`).join('')}${overArcs.map(renderQuestionArcPath).join('')}</svg>${lineDLabelsMarkup}${arcLabelsMarkup}</div></div>`;
+    return `${compileMarkup(cleanExplanationText)}${diagram}${warnings.join('')}`;
+  }
+
+  function compileQuestionExplanation(source) {
+    const raw = String(source || '');
+    const steps = parseExplanationSteps(raw);
+    if (steps.length > 0) {
+      let cursor = 0;
+      const parts = [];
+      for (const step of steps) {
+        const before = raw.slice(cursor, step.start).trim();
+        if (before) parts.push(`<div class="mkml-exp-note">${compileExplanationFragment(before)}</div>`);
+        const idChips = step.stepIds.length
+          ? step.stepIds.map((id) => {
+              const upper = id.toUpperCase();
+              const cls = upper === 'TG' ? ' is-tg' : upper === 'TU' ? ' is-tu' : '';
+              return `<span class="mkml-exp-step-id${cls}" data-step-id="${escapeHtml(id)}">${escapeHtml(id)}</span>`;
+            }).join('')
+          : '';
+        parts.push(
+          `<div class="mkml-exp-step" data-step-num="${step.stepNumber}" data-step-ids="${escapeHtml(step.stepIds.join(','))}">` +
+            `<div class="mkml-exp-step-head">` +
+              `<span class="mkml-exp-step-num">Step ${step.stepNumber}</span>` +
+              `<span class="mkml-exp-step-ids">${idChips}</span>` +
+            `</div>` +
+            `<div class="mkml-exp-step-body">${compileExplanationFragment(step.body)}</div>` +
+          `</div>`
+        );
+        cursor = step.end;
+      }
+      const after = raw.slice(cursor).trim();
+      if (after) parts.push(`<div class="mkml-exp-note">${compileExplanationFragment(after)}</div>`);
+      return `<div class="mkml-exp-steps">${parts.join('')}</div>`;
+    }
+    return compileExplanationFragment(raw);
   }
 
   function warnQuestionGraph(tag, message) { return `<span class="mkml-flow-error">${escapeHtml(tag)} skipped: ${escapeHtml(message)}</span>`; }
@@ -716,12 +1055,23 @@
     return (o1 === 0 && onSegment(a, c, b)) || (o2 === 0 && onSegment(a, d, b)) || (o3 === 0 && onSegment(c, a, d)) || (o4 === 0 && onSegment(c, b, d));
   }
 
+  function parseHierarchyHeader(raw) {
+    const trimmed = String(raw || '').trim();
+    const match = trimmed.match(/^([^,]+?)\s*,\s*name\s*=\s*([\s\S]+)$/i);
+    if (match) {
+      const id = match[1].trim();
+      const name = match[2].trim().replace(/^["']|["']$/g, '');
+      return { id, name };
+    }
+    return { id: trimmed, name: '' };
+  }
+
   function findEnclosingConceptMidAt(html, position) {
     const prefix = html.slice(0, position);
     let lastOpen = null;
     for (const token of prefix.matchAll(/<mid\s*=\s*(c\d+|un)\s*>|<\/mid\s*>|<Concept\s*==\s*([^>]+)>|<\/Concept\s*>/gi)) {
       if (/^<mid\b/i.test(token[0])) lastOpen = token[1].toUpperCase();
-      else if (/^<Concept\b/i.test(token[0])) lastOpen = token[2].trim();
+      else if (/^<Concept\b/i.test(token[0])) lastOpen = parseHierarchyHeader(token[2]).id;
       else lastOpen = null;
     }
     return lastOpen || '';
@@ -738,6 +1088,8 @@
     let html = normalizeSelfClosingLineD(masked);
     const lines = [];
     const overLines = [];
+    const arcs = [];
+    const overArcs = [];
     const boxes = [];
     const warn = (tag, message) => `<span class="mkml-flow-error">${escapeHtml(tag)} skipped: ${escapeHtml(message)}</span>`;
     html = html.replace(/<line\b([^>]*)>([\s\S]*?)<\/line(\s+[md])?\s*>/gi, (_whole, attributes, body, closingMode) => {
@@ -754,11 +1106,17 @@
         if ((lineColor && !validHexColor(lineColor)) || (textColor && !validHexColor(textColor))) {
           return warn(tag, 'line-color and text-color must be 3- or 6-digit hex values such as #36C or #3366CC');
         }
+        const floatingRaw = readAttribute(attributes, 'floating');
+        const floating = parseFloatingOffset(floatingRaw, 4, 'mm');
+        if (floatingRaw && !floating) {
+          return warn(tag, 'floating must be a number in mm or px, e.g. floating = 2mm or -3mm');
+        }
         overLines.push({
           points: parsed.points,
           color: lineColor || 'currentColor',
           textColor: textColor || '#000000',
           labelText: parsed.labelText,
+          floating,
           isLineD: true
         });
         return '';
@@ -773,6 +1131,56 @@
       (overBox ? overLines : lines).push({ points, color: color || 'currentColor' });
       return '';
     });
+    html = html.replace(/<arc\b([^>]*?)(?:\/>|>([\s\S]*?)<\/arc(?:\s+m)?\s*>)/gi, (_whole, attributes, body = '') => {
+      const overBox = /(?:^|\s)m(?:\s|$)/i.test(attributes);
+      const tag = overBox ? '<arc m>' : '<arc>';
+      const points = parseArcPoints(readAttribute(attributes, 'points'));
+      if (!points) return warn(tag, 'points must contain two valid grid points, e.g. points = (2,4),(6,4)');
+      const depthRaw = readAttribute(attributes, 'depth');
+      const depth = depthRaw === '' ? 1 : Number(depthRaw);
+      if (!Number.isFinite(depth)) return warn(tag, 'depth must be a valid number, e.g. depth = 1 or -0.5');
+      const color = readAnyAttribute(attributes, ['line-color', 'color']);
+      const textColor = readAnyAttribute(attributes, ['text-color', 'color']);
+      if ((color && !validHexColor(color)) || (textColor && !validHexColor(textColor))) {
+        return warn(tag, 'color and text-color must be 3- or 6-digit hex values such as #36C or #3366CC');
+      }
+      const floatingRaw = readAttribute(attributes, 'floating');
+      const floating = parseFloatingOffset(floatingRaw, 1.5, 'mm');
+      if (floatingRaw && !floating) return warn(tag, 'floating must be a number in mm or px');
+      (overBox ? overArcs : arcs).push({
+        points,
+        depth,
+        color: color || 'currentColor',
+        textColor: textColor || color || '#000000',
+        labelText: String(body || '').trim(),
+        floating
+      });
+      return '';
+    });
+    // Support <enclave> as a normal box on the main Preview grid as well (useful when visually designing step enclaves)
+    const canvasEnclaves = extractEnclaveBlocks(html);
+    if (canvasEnclaves.enclaves.length) {
+      html = canvasEnclaves.stripped;
+      for (const enc of canvasEnclaves.enclaves) {
+        const pts = parseEnclavePoints(enc.attributes);
+        const bg = readAnyAttribute(enc.attributes, ['bg-color', 'background-color']);
+        const col = readAnyAttribute(enc.attributes, ['text-color', 'color']);
+        if (!validFlowPolygon(pts) || (bg && !validHexColor(bg)) || (col && !validHexColor(col))) {
+          html += warn('<enclave>', 'points must form a valid 4-point quadrilateral (or 2-point rectangle) with valid hex colors');
+          continue;
+        }
+        boxes.push({
+          points: pts,
+          isBoxW: false,
+          isEnclave: true,
+          conceptMid: '',
+          questionPath: readAttribute(enc.attributes, 'path'),
+          background: bg || '#FFFFFF',
+          color: col || '#CBD5E1',
+          body: enc.body || ''
+        });
+      }
+    }
     const boxBlocks = [];
     const boxStack = [];
     for (const token of html.matchAll(/<box\b[^>]*>|<\/box(?:\s+w)?\s*>/gi)) {
@@ -809,6 +1217,7 @@
       }
       const background = readAnyAttribute(block.attributes, ['bg-color', 'background-color']);
       const color = readAnyAttribute(block.attributes, ['text-color', 'color']);
+      const questionPath = readAttribute(block.attributes, 'path');
       if ((background && !validHexColor(background)) || (color && !validHexColor(color))) {
         replacements.push({ ...block, markup: warn(tagLabel, 'background-color/bg-color and color/text-color must be 3- or 6-digit hex values') }); continue;
       }
@@ -817,6 +1226,7 @@
         body: block.body,
         isBoxW: Boolean(block.isBoxW),
         conceptMid: block.conceptMid || '',
+        questionPath: questionPath || '',
         background: background || (block.isBoxW ? 'transparent' : '#fbfbf7'),
         color: color || (block.isBoxW ? '#000000' : 'var(--ink)')
       });
@@ -824,11 +1234,23 @@
     }
     for (const replacement of replacements.reverse()) html = html.slice(0, replacement.start) + replacement.markup + html.slice(replacement.end);
 
-    const maxCol = Math.max(25, ...lines.flatMap((line) => line.points.map((point) => point.x)), ...overLines.flatMap((line) => line.points.map((point) => point.x)), ...boxes.flatMap((box) => box.points.map((point) => point.x)));
-    const maxRow = Math.max(35, ...lines.flatMap((line) => line.points.map((point) => point.y)), ...overLines.flatMap((line) => line.points.map((point) => point.y)), ...boxes.flatMap((box) => box.points.map((point) => point.y)));
+    const allArcs = [...arcs, ...overArcs];
+    const arcGeoms = allArcs.map((arc) => computeArcGeometry(arc.points[0], arc.points[1], arc.depth, 64, 32));
+    const maxCol = Math.max(25, ...lines.flatMap((line) => line.points.map((point) => point.x)), ...overLines.flatMap((line) => line.points.map((point) => point.x)), ...arcGeoms.map((g) => g.maxX), ...boxes.flatMap((box) => box.points.map((point) => point.x)));
+    const maxRow = Math.max(35, ...lines.flatMap((line) => line.points.map((point) => point.y)), ...overLines.flatMap((line) => line.points.map((point) => point.y)), ...arcGeoms.map((g) => g.maxY), ...boxes.flatMap((box) => box.points.map((point) => point.y)));
     const svgWidth = maxCol * 100;
     const svgHeight = maxRow * 32;
-    const lineMarkup = lines.length ? `<svg class="mkml-flow-lines" data-max-col="${maxCol}" data-max-row="${maxRow}" viewBox="0 0 ${svgWidth} ${svgHeight}" width="100%" height="${svgHeight}" preserveAspectRatio="none" aria-hidden="true">${lines.map((line) => `<polyline points="${line.points.map((point) => `${(point.x - 1) * 100},${(point.y - 1) * 32}`).join(' ')}" fill="none" stroke="${escapeHtml(line.color)}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`).join('')}</svg>` : '';
+    const renderCanvasArcPath = (arc) => {
+      const g = computeArcGeometry(arc.points[0], arc.points[1], arc.depth, 64, 32);
+      const x1 = (arc.points[0].x - 1) * 100;
+      const y1 = (arc.points[0].y - 1) * 32;
+      const cx = (g.ctrlX - 1) * 100;
+      const cy = (g.ctrlY - 1) * 32;
+      const x2 = (arc.points[1].x - 1) * 100;
+      const y2 = (arc.points[1].y - 1) * 32;
+      return `<path class="mkml-arc-path" d="M ${formatPercent(x1)},${formatPercent(y1)} Q ${formatPercent(cx)},${formatPercent(cy)} ${formatPercent(x2)},${formatPercent(y2)}" fill="none" stroke="${escapeHtml(arc.color)}" stroke-width="2.5" stroke-linecap="round" vector-effect="non-scaling-stroke"/>`;
+    };
+    const lineMarkup = (lines.length || arcs.length) ? `<svg class="mkml-flow-lines" data-max-col="${maxCol}" data-max-row="${maxRow}" viewBox="0 0 ${svgWidth} ${svgHeight}" width="100%" height="${svgHeight}" preserveAspectRatio="none" aria-hidden="true">${lines.map((line) => `<polyline points="${line.points.map((point) => `${(point.x - 1) * 100},${(point.y - 1) * 32}`).join(' ')}" fill="none" stroke="${escapeHtml(line.color)}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`).join('')}${arcs.map(renderCanvasArcPath).join('')}</svg>` : '';
     const lineDLabels = overLines.filter((line) => line.isLineD && line.labelText).map((line) => {
       const midIdx = Math.floor((line.points.length - 1) / 2);
       const pA = line.points[midIdx];
@@ -836,9 +1258,19 @@
       const midColOffset = ((pA.x + pB.x) / 2) - 1;
       const midRowPx = 47 + (((pA.y + pB.y) / 2) - 1) * 32;
       const angleDeg = computeUprightAngleDeg(pA, pB, 64, 32);
-      return `<div class="mkml-line-d-label" data-max-col="${maxCol}" data-max-row="${maxRow}" style="left:calc(${midColOffset} * var(--grid-cell-width));top:${midRowPx}px;color:${escapeHtml(line.textColor || '#000000')};transform:translate(-50%,-100%) rotate(${angleDeg}deg)">${compileInline(line.labelText)}</div>`;
+      const transform = buildLineDTransform(angleDeg, line.floating);
+      return `<div class="mkml-line-d-label" data-floating="${escapeHtml(line.floating?.css || '4mm')}" data-max-col="${maxCol}" data-max-row="${maxRow}" style="left:calc(${midColOffset} * var(--grid-cell-width));top:${midRowPx}px;color:${escapeHtml(line.textColor || '#000000')};transform:${transform}">${compileInline(line.labelText)}</div>`;
     }).join('');
-    const overLineMarkup = (overLines.length ? `<svg class="mkml-flow-lines-m" data-max-col="${maxCol}" data-max-row="${maxRow}" viewBox="0 0 ${svgWidth} ${svgHeight}" width="100%" height="${svgHeight}" preserveAspectRatio="none" aria-hidden="true">${overLines.map((line) => `<polyline points="${line.points.map((point) => `${(point.x - 1) * 100},${(point.y - 1) * 32}`).join(' ')}" fill="none" stroke="${escapeHtml(line.color)}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`).join('')}</svg>` : '') + lineDLabels;
+    const arcLabels = allArcs.filter((arc) => arc.labelText).map((arc) => {
+      const g = computeArcGeometry(arc.points[0], arc.points[1], arc.depth, 64, 32);
+      const dir = arc.depth < 0 ? -1 : 1;
+      const shiftPx = (arc.floating ? arc.floating.px : 5.67) * dir;
+      const apexColOffset = g.apexX - 1;
+      const apexRowPx = 47 + (g.apexY - 1) * 32 + g.ny * shiftPx;
+      const extraLeftPx = g.nx * shiftPx;
+      return `<div class="mkml-arc-label" data-max-col="${maxCol}" data-max-row="${maxRow}" style="left:calc(${formatPercent(apexColOffset)} * var(--grid-cell-width) + ${formatPercent(extraLeftPx)}px);top:${formatPercent(apexRowPx)}px;color:${escapeHtml(arc.textColor || '#000000')};transform:translate(-50%,-50%)">${compileInline(arc.labelText)}</div>`;
+    }).join('');
+    const overLineMarkup = ((overLines.length || overArcs.length) ? `<svg class="mkml-flow-lines-m" data-max-col="${maxCol}" data-max-row="${maxRow}" viewBox="0 0 ${svgWidth} ${svgHeight}" width="100%" height="${svgHeight}" preserveAspectRatio="none" aria-hidden="true">${overLines.map((line) => `<polyline points="${line.points.map((point) => `${(point.x - 1) * 100},${(point.y - 1) * 32}`).join(' ')}" fill="none" stroke="${escapeHtml(line.color)}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`).join('')}${overArcs.map(renderCanvasArcPath).join('')}</svg>` : '') + lineDLabels + arcLabels;
     const boxMarkup = boxes.map((box) => {
       const minX = Math.min(...box.points.map((point) => point.x)), maxX = Math.max(...box.points.map((point) => point.x));
       const minY = Math.min(...box.points.map((point) => point.y)), maxY = Math.max(...box.points.map((point) => point.y));
@@ -847,14 +1279,21 @@
       const width = maxX - minX;
       const top = 47 + (minY - 1) * 32;
       const height = (maxY - minY) * 32;
-      const content = depth < 16 ? compileSource(restoreComments(box.body), depth + 1) : compileMarkup(restoreComments(box.body));
+      const rawBody = restoreComments(box.body);
+      const compiledBody = depth < 16 ? compileSource(rawBody, depth + 1) : compileMarkup(rawBody);
+      const hasInlineQuiz = /class="quiz-group"/.test(compiledBody);
+      const content = box.questionPath && !hasInlineQuiz
+        ? `${compiledBody}<div class="mkml-qn-path-host" data-question-path="${escapeHtml(box.questionPath)}"></div>`
+        : compiledBody;
       const conceptAttr = box.conceptMid ? ` data-concept-mid="${escapeHtml(box.conceptMid)}"` : '';
+      const pathAttr = box.questionPath ? ` data-question-path="${escapeHtml(box.questionPath)}"` : '';
+      const pathClass = box.questionPath ? ' has-question-path' : '';
       if (box.isBoxW) {
         const bw = computeBoxWBaseline(box.points);
         const borderStyle = box.background === 'transparent' ? 'border-color:transparent;' : '';
-        return `<div class="mkml-flow-box mkml-flow-box-w" data-box-w="true"${conceptAttr} data-min-col="${minX}" data-min-row="${minY}" data-max-col="${maxX}" data-max-row="${maxY}" data-grid-width="${width}" data-grid-height="${maxY - minY}" style="left:calc(${left} * var(--grid-cell-width));top:${top}px;width:calc(${width} * var(--grid-cell-width));height:${height}px;color:${escapeHtml(box.color)}"><div class="mkml-flow-box-shape" style="clip-path:polygon(${polygon});background-color:${escapeHtml(box.background)};color:${escapeHtml(box.color)};${borderStyle}"></div><svg class="mkml-box-w-line" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><line x1="${bw.x1}" y1="${bw.y1}" x2="${bw.x2}" y2="${bw.y2}" stroke="${escapeHtml(box.color)}" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg><div class="mkml-flow-box-content mkml-box-w-text" style="left:${bw.midX}%;top:${bw.midY}%;transform:translate(-50%,-100%) rotate(${bw.angleDeg}deg)">${content}</div></div>`;
+        return `<div class="mkml-flow-box mkml-flow-box-w${pathClass}" data-box-w="true"${conceptAttr}${pathAttr} data-min-col="${minX}" data-min-row="${minY}" data-max-col="${maxX}" data-max-row="${maxY}" data-grid-width="${width}" data-grid-height="${maxY - minY}" style="left:calc(${left} * var(--grid-cell-width));top:${top}px;width:calc(${width} * var(--grid-cell-width));height:${height}px;color:${escapeHtml(box.color)}"><div class="mkml-flow-box-shape" style="clip-path:polygon(${polygon});background-color:${escapeHtml(box.background)};color:${escapeHtml(box.color)};${borderStyle}"></div><div class="mkml-flow-box-content mkml-box-w-text" style="left:${bw.midX}%;top:50%;transform:translate(-50%,-50%) rotate(${bw.angleDeg}deg)">${content}</div></div>`;
       }
-      return `<div class="mkml-flow-box"${conceptAttr} data-min-col="${minX}" data-min-row="${minY}" data-max-col="${maxX}" data-max-row="${maxY}" data-grid-width="${width}" data-grid-height="${maxY - minY}" style="left:calc(${left} * var(--grid-cell-width));top:${top}px;width:calc(${width} * var(--grid-cell-width));height:${height}px;color:${escapeHtml(box.color)}"><div class="mkml-flow-box-shape" style="clip-path:polygon(${polygon});background-color:${escapeHtml(box.background)};color:${escapeHtml(box.color)}"></div><div class="mkml-flow-box-content">${content}</div></div>`;
+      return `<div class="mkml-flow-box${pathClass}"${conceptAttr}${pathAttr} data-min-col="${minX}" data-min-row="${minY}" data-max-col="${maxX}" data-max-row="${maxY}" data-grid-width="${width}" data-grid-height="${maxY - minY}" style="left:calc(${left} * var(--grid-cell-width));top:${top}px;width:calc(${width} * var(--grid-cell-width));height:${height}px;color:${escapeHtml(box.color)}"><div class="mkml-flow-box-shape" style="clip-path:polygon(${polygon});background-color:${escapeHtml(box.background)};color:${escapeHtml(box.color)}"></div><div class="mkml-flow-box-content">${content}</div></div>`;
     }).join('');
     return { html: restoreComments(html), lineMarkup, boxMarkup, overLineMarkup };
   }
@@ -862,11 +1301,23 @@
   function compileMarkup(source) {
     let html = String(source || '');
     html = html.replace(/<(?:Domain|Chapter)\s*==\s*[^>]+>/gi, '');
-    html = html.replace(/<Subtopic\s*==\s*([^>]+)>/gi, (_whole, st) => `<section class="mkml-subtopic-scope" data-subtopic="${escapeHtml(st.trim())}">`);
+    html = html.replace(/<Subtopic\s*==\s*([^>]+)>/gi, (_whole, st) => {
+      const parsed = parseHierarchyHeader(st);
+      const nameAttr = parsed.name ? ` data-name="${escapeHtml(parsed.name)}"` : '';
+      return `<section class="mkml-subtopic-scope" data-subtopic="${escapeHtml(parsed.id)}"${nameAttr}>`;
+    });
     html = html.replace(/<\/Subtopic\s*>/gi, '</section>');
-    html = html.replace(/<Concept\s*==\s*([^>]+)>/gi, (_whole, con) => `<section class="mkml-concept-scope" data-concept="${escapeHtml(con.trim())}">`);
+    html = html.replace(/<Concept\s*==\s*([^>]+)>/gi, (_whole, con) => {
+      const parsed = parseHierarchyHeader(con);
+      const nameAttr = parsed.name ? ` data-name="${escapeHtml(parsed.name)}"` : '';
+      return `<section class="mkml-concept-scope" data-concept="${escapeHtml(parsed.id)}"${nameAttr}>`;
+    });
     html = html.replace(/<\/Concept\s*>/gi, '</section>');
-    html = html.replace(/<MC\s*==\s*([^>]+)>/gi, (_whole, mc) => `<div class="mkml-mc-scope" data-mc="${escapeHtml(mc.trim())}">`);
+    html = html.replace(/<MC\s*==\s*([^>]+)>/gi, (_whole, mc) => {
+      const parsed = parseHierarchyHeader(mc);
+      const nameAttr = parsed.name ? ` data-name="${escapeHtml(parsed.name)}"` : '';
+      return `<div class="mkml-mc-scope" data-mc="${escapeHtml(parsed.id)}"${nameAttr}>`;
+    });
     html = html.replace(/<\/MC\s*>/gi, '</div>');
     html = html.replace(/<mid\s*=\s*(c\d+|un)\s*>/gi, (_whole, mid) => `<section class="mkml-mid-concept" data-mid="${escapeHtml(mid.toUpperCase())}">`);
     html = html.replace(/<\/mid\s*>/gi, '</section>');
@@ -880,9 +1331,13 @@
   }
 
   function compileSource(source, depth = 0) {
-    const protectedSource = stripCssLinks(source).replace(/(<explanation\s*=\s*)([\s\S]*?)(?=<\/Qn\s*>|<\/qn\s+all\s*>)/gi, (_whole, opening, body) => opening + body.replace(/<(\/?)((?:line|box))\b/gi, '<$1question-$2'));
+    const protectTags = (body) => body.replace(/<(\/?)((?:line|box|arc|enclave))\b/gi, '<$1question-$2');
+    const protectedSource = stripCssLinks(source)
+      .replace(/(<explanation\s*>)([\s\S]*?)(<\/explanation\s*>)/gi, (_whole, open, body, close) => open + protectTags(body) + close)
+      .replace(/(<step\s+\d+\s*-\s*[^>]+>)([\s\S]*?)(<\/step(?:\s+\d+)?\s*>)/gi, (_whole, open, body, close) => open + protectTags(body) + close)
+      .replace(/(<explanation\s*=\s*)([\s\S]*?)(?=<\/Qn\s*>|<\/qn\s+all\s*>)/gi, (_whole, opening, body) => opening + protectTags(body));
     const flow = compileFlowchartTags(protectedSource, depth);
-    const restoredHtml = flow.html.replace(/<(\/?)question-(line|box)\b/gi, '<$1$2');
+    const restoredHtml = flow.html.replace(/<(\/?)question-(line|box|arc|enclave)\b/gi, '<$1$2');
     return compileMarkup(restoredHtml) + flow.lineMarkup + flow.boxMarkup + flow.overLineMarkup;
   }
 
@@ -896,5 +1351,16 @@
     });
   }
 
-  return { compile, compileCss, cleanCss, linkedCss, stripCssLinks, compileInline, toTex, renderMath };
+  return {
+    compile,
+    compileCss,
+    cleanCss,
+    linkedCss,
+    stripCssLinks,
+    compileInline,
+    compileExplanation: compileQuestionExplanation,
+    parseExplanationSteps,
+    toTex,
+    renderMath
+  };
 });

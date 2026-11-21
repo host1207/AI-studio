@@ -44,6 +44,7 @@ interface Props {
   concepts: ConceptItem[];
   microConcepts: MicroConceptItem[];
   stepsByQid: Record<string, ExplanationStepItem[]>;
+  liveChapterMkml?: string;
 }
 
 interface AttemptTupleBreakdown {
@@ -128,6 +129,7 @@ export const TrackerTestAnalysis: React.FC<Props> = ({
   concepts,
   microConcepts,
   stepsByQid,
+  liveChapterMkml,
 }) => {
   // Filter test sessions for the current chapter (or fallback to all)
   const chapterSessions = useMemo(() => {
@@ -153,9 +155,10 @@ export const TrackerTestAnalysis: React.FC<Props> = ({
         chapters,
         subtopics,
         concepts,
-        microConcepts
+        microConcepts,
+        liveChapterMkml
       ),
-    [ledger, domains, chapters, subtopics, concepts, microConcepts]
+    [ledger, domains, chapters, subtopics, concepts, microConcepts, liveChapterMkml]
   );
 
   // Filter Bar State:
@@ -246,7 +249,7 @@ export const TrackerTestAnalysis: React.FC<Props> = ({
         activeSeconds = Math.round(sumSec / count);
       }
 
-      const qSteps = stepsByQid[q.uniqueId] || getQuestionExplanationSteps(q.uniqueId);
+      const qSteps = getQuestionExplanationSteps(q.uniqueId, stepsByQid, q.rawQnBody);
       const stepChainId = getStructuralQuestionIdFromSteps(qSteps);
 
       return {
@@ -712,7 +715,7 @@ export const TrackerTestAnalysis: React.FC<Props> = ({
             <div className="flex items-center gap-2 text-xs font-bold uppercase text-[#111827]">
               <span className="w-2 h-2 rounded-full bg-[#1D4ED8]" />
               <span>
-                STEP-ID / MICRO CONCEPT (T1, T2, T3) ACCURACY &amp; WEAKNESS BREAKDOWN
+                STEP-ID / MICRO CONCEPT (BASE IDs, TG, Tu) ACCURACY &amp; WEAKNESS BREAKDOWN
               </span>
               <span className="px-2 py-0.5 text-[10px] bg-[#EFF6FF] text-[#1D4ED8] border border-[#BFDBFE] rounded font-bold">
                 EVALUATED ATTEMPT: {speedMode === 'A1' ? 'A1 (FIRST)' : 'An (LATEST)'}

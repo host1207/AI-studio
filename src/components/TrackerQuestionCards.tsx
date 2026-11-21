@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -9,6 +9,9 @@ import {
   Trash2,
   Lock,
   Check,
+  Code2,
+  Eye,
+  Save,
 } from 'lucide-react';
 import type {
   ChapterLedger,
@@ -18,6 +21,8 @@ import {
   type ScannedQuestionItem,
   type ExplanationStepItem,
   getQuestionExplanationSteps,
+  getStructuralQuestionIdFromSteps,
+  splitStepIds,
 } from '../utils/mkmlStorageScanner';
 import type {
   DomainItem,
@@ -46,7 +51,7 @@ interface Props {
       seconds: number;
       option: string;
     }[]
-  ) => void;
+  ) => Promise<{ ok: boolean; file?: string; attemptSummary?: string; error?: string }> | void;
   onBackToQuestionIndex: () => void;
   onOpenTestAnalysis: () => void;
   onGoToTrackerPageOne: () => void;
@@ -64,10 +69,67 @@ interface ParsedQnContent {
   defaultSteps: ExplanationStepItem[];
 }
 
+interface MkmlWindowApi {
+  compileInline?: (src: string) => string;
+  compileExplanation?: (src: string) => string;
+  compile?: (src: string) => string;
+  renderMath?: (root: HTMLElement | null) => void;
+}
+
+const MkmlRenderedBlock: React.FC<{
+  source: string;
+  inline?: boolean;
+  className?: string;
+}> = ({ source, inline = false, className = '' }) => {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const compiledHtml = useMemo(() => {
+    const mkml = (window as unknown as { MKML?: MkmlWindowApi }).MKML;
+    if (!mkml) return '';
+    try {
+      if (inline && typeof mkml.compileInline === 'function') {
+        return mkml.compileInline(source);
+      }
+      if (typeof mkml.compileExplanation === 'function') {
+        return mkml.compileExplanation(source);
+      }
+      if (typeof mkml.compile === 'function') {
+        return mkml.compile(source);
+      }
+    } catch {
+      return '';
+    }
+    return '';
+  }, [source, inline]);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const mkml = (window as unknown as { MKML?: MkmlWindowApi }).MKML;
+    if (mkml && typeof mkml.renderMath === 'function') {
+      mkml.renderMath(el);
+    }
+    el.querySelectorAll<HTMLElement>('.mkml-spoiler').forEach((node) => {
+      node.onclick = () => node.classList.toggle('revealed');
+    });
+  }, [compiledHtml]);
+
+  if (!compiledHtml) {
+    return inline ? <span className={className}>{source}</span> : <div className={className}>{source}</div>;
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      className={`${inline ? 'inline' : 'block'} ${className}`}
+      dangerouslySetInnerHTML={{ __html: compiledHtml }}
+    />
+  );
+};
+
 function parseQuestionCardData(raw: string, uniqueId: string): ParsedQnContent {
   const xmlTextMatch = raw.match(/<Text>([\s\S]*?)<\/Text>/i);
   const anglesTextMatch = raw.match(
-    /<text\s*=\s*([\s\S]*?)(?=<Options\s*>|<[A-D]\s*=|<(?:answer|ans|explanation)\s*=|<\/Qn\s*>|$)/i
+    /<text\s*=\s*([\s\S]*?)(?=<Options\s*>|<[A-D]\s*=|<(?:answer|ans)\s*=|<explanation(?:\s*=|\s*>)|<\/Qn\s*>|$)/i
   );
   const extractedText = xmlTextMatch
     ? xmlTextMatch[1].trim()
@@ -88,14 +150,26 @@ function parseQuestionCardData(raw: string, uniqueId: string): ParsedQnContent {
   const parsedOptions: { key: string; label: string }[] = [];
 
   // 1) Try Angles <A = ...> <B = ...> <C = ...> <D = ...> option tags first
-  const anglesOptionRegex = /<([A-Da-d])\s*=\s*([^>]+)>/g;
-  let aoMatch: RegExpExecArray | null;
-  while ((aoMatch = anglesOptionRegex.exec(optionsRaw)) !== null) {
-    parsedOptions.push({
-      key: aoMatch[1].toUpperCase(),
-      label: aoMatch[2].trim(),
-    });
-  }
+  // Use boundary slicing (not [^>]+) so options containing <math == ...> or HTML tags never truncate!
+  const optionBoundaries = [...optionsRaw.matchAll(/<([A-Da-d])(?:\s*=\s*|\s+)/g)];
+  optionBoundaries.forEach((entry, index) => {
+    const start = (entry.index ?? 0) + entry[0].length;
+    const nextBoundary =
+      index + 1 < optionBoundaries.length
+        ? (optionBoundaries[index + 1].index ?? optionsRaw.length)
+        : optionsRaw.length;
+    const rawLabel = optionsRaw
+      .slice(start, nextBoundary)
+      .trim()
+      .replace(/>\s*$/, '')
+      .trim();
+    if (rawLabel) {
+      parsedOptions.push({
+        key: entry[1].toUpperCase(),
+        label: rawLabel,
+      });
+    }
+  });
 
   // 2) Fallback to pipe-separated <Options>A. ... | B. ...</Options>
   if (parsedOptions.length === 0 && optionsRaw) {
@@ -124,7 +198,7 @@ function parseQuestionCardData(raw: string, uniqueId: string): ParsedQnContent {
           { key: 'D', label: 'Fourth option' },
         ];
 
-  const defaultSteps = getQuestionExplanationSteps(uniqueId);
+  const defaultSteps = getQuestionExplanationSteps(uniqueId, undefined, raw);
 
   return {
     text: extractedText,
@@ -208,6 +282,31 @@ export const TrackerQuestionCards: React.FC<Props> = ({
   // Strictly bounded to the N selected questions (zero blank pages)
   const totalCards = selectedItems.length;
   const [currentIndex, setCurrentIndex] = useState<number>(0);
+  const [jumpInput, setJumpInput] = useState<string>('');
+  const pillStripRef = useRef<HTMLDivElement | null>(null);
+
+  // Keep active question pill centered inside the scrollable strip without shifting the page viewport
+  useEffect(() => {
+    const strip = pillStripRef.current;
+    if (!strip) return;
+    const activePill = strip.querySelector<HTMLElement>(`[data-pill-index="${currentIndex}"]`);
+    if (!activePill) return;
+    const targetLeft =
+      activePill.offsetLeft - strip.clientWidth / 2 + activePill.clientWidth / 2;
+    strip.scrollTo({
+      left: Math.max(0, targetLeft),
+      behavior: 'smooth',
+    });
+  }, [currentIndex, totalCards]);
+
+  const handleJumpToQuestion = (e: React.FormEvent) => {
+    e.preventDefault();
+    const num = parseInt(jumpInput, 10);
+    if (!Number.isFinite(num)) return;
+    const clamped = Math.max(1, Math.min(totalCards, num));
+    setCurrentIndex(clamped - 1);
+    setJumpInput('');
+  };
 
   // Selected option per question uniqueId
   const [pickedOptions, setPickedOptions] = useState<Record<string, string>>({});
@@ -223,6 +322,13 @@ export const TrackerQuestionCards: React.FC<Props> = ({
 
   // In Test Mode ('full'), answers & explanations stay locked until Submit Test on the last card
   const [isTestSubmitted, setIsTestSubmitted] = useState<boolean>(false);
+  const [testDiskSaveStatus, setTestDiskSaveStatus] = useState<{
+    state: 'idle' | 'saving' | 'saved' | 'error';
+    message: string;
+  }>({ state: 'idle', message: '' });
+
+  // Per-step MKML source editor toggle (keyed by `${activeQid}:${stepIdx}`)
+  const [editingStepKeys, setEditingStepKeys] = useState<Record<string, boolean>>({});
 
   const activeItem = selectedItems[currentIndex] || selectedItems[0];
   const activeQid = activeItem?.question.uniqueId || '';
@@ -244,10 +350,10 @@ export const TrackerQuestionCards: React.FC<Props> = ({
   const activeSteps = stepsByQid[activeQid] || parsedCard.defaultSteps;
 
   // Synthesized Structural Question ID from the Step-IDs (e.g. T1-T2) — distinct from Unique Question ID
-  const structuralQuestionId = useMemo(() => {
-    const ids = activeSteps.map((s) => s.stepId.trim()).filter(Boolean);
-    return ids.length > 0 ? ids.join('-') : 'T1';
-  }, [activeSteps]);
+  const structuralQuestionId = useMemo(
+    () => getStructuralQuestionIdFromSteps(activeSteps),
+    [activeSteps]
+  );
 
   // Determine whether the current card's answer & bottom explanations are revealed:
   // 1) Study mode ('study'): Always revealed immediately
@@ -275,14 +381,17 @@ export const TrackerQuestionCards: React.FC<Props> = ({
     return () => window.clearInterval(interval);
   }, [isCurrentCardTimerRunning, activeQid]);
 
-  // Keyboard Left / Right arrow navigation across the N selected cards
+  // Keyboard Left / Right arrow navigation across the N selected cards (prevent horizontal scroll)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      const targetEl = e.target as HTMLElement | null;
+      const tag = targetEl?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || targetEl?.isContentEditable) return;
       if (e.key === 'ArrowLeft') {
+        e.preventDefault();
         setCurrentIndex((prev) => Math.max(0, prev - 1));
       } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
         setCurrentIndex((prev) => Math.min(totalCards - 1, prev + 1));
       }
     };
@@ -326,14 +435,44 @@ export const TrackerQuestionCards: React.FC<Props> = ({
     };
   }, [activeItem, chapters, domains, subtopics, concepts, ledger.chapterName]);
 
-  // Available Step-IDs from Micro Concept Registry Page 5 + standard T1..T5 & TG
+  // Permanent Full Base IDs from Micro Concept Registry + TG (general) + Tu (unmapped)
   const availableStepIdOptions = useMemo(() => {
-    const set = new Set<string>(['T1', 'T2', 'T3', 'TG', 'T4', 'T5']);
+    const set = new Set<string>(['TG', 'Tu']);
     microConcepts.forEach((mc) => {
-      if (mc.shortCode) set.add(mc.shortCode);
+      const id = (mc.baseId || mc.shortCode || '').trim();
+      if (id) set.add(id.toUpperCase() === 'TU' ? 'Tu' : id);
     });
-    return Array.from(set);
+    return Array.from(set).sort((a, b) => {
+      if (a === 'Tu') return 1;
+      if (b === 'Tu') return -1;
+      if (a === 'TG') return 1;
+      if (b === 'TG') return -1;
+      return a.localeCompare(b, undefined, { numeric: true });
+    });
   }, [microConcepts]);
+
+  // Resolve any step token (QA-TRG-BS-FR-MC1, TG, Tu) into { id, label, kind }
+  const resolveStepBadgeInfo = (token: string) => {
+    const clean = token.trim();
+    const upper = clean.toUpperCase();
+    if (upper === 'TG') {
+      return { id: 'TG', label: 'Global General Knowledge', kind: 'tg' as const };
+    }
+    if (upper === 'TU') {
+      return { id: 'Tu', label: 'Unmapped Step (Missing MC)', kind: 'tu' as const };
+    }
+    const match =
+      microConcepts.find((mc) => mc.baseId && mc.baseId.trim().toUpperCase() === upper) ||
+      microConcepts.find((mc) => mc.shortCode.trim().toUpperCase() === upper);
+    if (match) {
+      return {
+        id: match.isGlobalGeneral ? 'TG' : match.baseId || match.shortCode,
+        label: match.code,
+        kind: match.isGlobalGeneral ? ('tg' as const) : ('mc' as const),
+      };
+    }
+    return { id: clean, label: 'Unregistered Step ID', kind: 'unknown' as const };
+  };
 
   const handleSelectOption = (optionKey: string) => {
     if (executionModality === 'study') return;
@@ -344,8 +483,8 @@ export const TrackerQuestionCards: React.FC<Props> = ({
     }));
   };
 
-  // Submit Test on the last question card (ONLY records data into marks.tex in Test Mode)
-  const handleSubmitFullTest = () => {
+  // Submit Test on the last question card (records option + timing in A+1 format into dedicated tracker-ledger.json)
+  const handleSubmitFullTest = async () => {
     if (executionModality !== 'full' || isTestSubmitted) return;
 
     const evaluations = selectedItems.map((item) => {
@@ -370,8 +509,28 @@ export const TrackerQuestionCards: React.FC<Props> = ({
       };
     });
 
-    onRecordEvaluatedTest(evaluations);
     setIsTestSubmitted(true);
+    setTestDiskSaveStatus({
+      state: 'saving',
+      message: `Saving ${totalCards} attempt(s) (options & timings in A+1 format) to tracker-ledger.json...`,
+    });
+    const result = await Promise.resolve(onRecordEvaluatedTest(evaluations));
+    if (result && result.ok) {
+      setTestDiskSaveStatus({
+        state: 'saved',
+        message: `Test Submitted! Appended ${result.attemptSummary || 'A+1'} (${totalCards} Qs — options & timings) to ${result.file || 'tracker-ledger.json'} on disk.`,
+      });
+    } else if (result && !result.ok) {
+      setTestDiskSaveStatus({
+        state: 'error',
+        message: `Recorded in session, but disk write failed: ${result.error || 'unknown error'}`,
+      });
+    } else {
+      setTestDiskSaveStatus({
+        state: 'saved',
+        message: `Test Submitted! All ${totalCards} question attempts (options & timings) appended in A+1 format.`,
+      });
+    }
   };
 
   // Edit / Add / Delete explanation steps & right-side Step-IDs
@@ -398,7 +557,7 @@ export const TrackerQuestionCards: React.FC<Props> = ({
       list.push({
         stepNumber: nextNum,
         text: `Step ${nextNum} explanation...`,
-        stepId: `T${nextNum}`,
+        stepId: availableStepIdOptions[0] || 'TG',
       });
       return { ...prev, [activeQid]: list };
     });
@@ -411,6 +570,85 @@ export const TrackerQuestionCards: React.FC<Props> = ({
         .map((s, idx) => ({ ...s, stepNumber: idx + 1 }));
       return { ...prev, [activeQid]: list };
     });
+  };
+
+  // Write edited steps directly back into chapter questions.html on disk
+  const [diskSaveStatus, setDiskSaveStatus] = useState<{
+    qid: string;
+    state: 'idle' | 'saving' | 'saved' | 'error';
+    message: string;
+  }>({ qid: '', state: 'idle', message: '' });
+
+  const emitStepRoutingStatus = (
+    status: 'Pending' | 'Verified' | 'Sync Error',
+    detail: string,
+    targetPath?: string
+  ) => {
+    const payload = {
+      status,
+      detail,
+      targetPath: targetPath || '',
+      addedIds: activeQid ? [activeQid] : [],
+      source: 'step-save' as const,
+      updatedAt: new Date().toISOString(),
+    };
+    (window as unknown as { __anglesRoutingStatus?: typeof payload }).__anglesRoutingStatus = payload;
+    window.dispatchEvent(new CustomEvent('angles:routing-status', { detail: payload }));
+  };
+
+  const handleSaveStepsToDisk = async () => {
+    if (!activeQid || activeSteps.length === 0) return;
+    setDiskSaveStatus({ qid: activeQid, state: 'saving', message: 'Writing to disk...' });
+    emitStepRoutingStatus('Pending', `Saving Step-IDs for ${activeQid} to disk...`, activeItem?.pathLabel);
+    try {
+      const chMatch = chapters.find(
+        (c) => c.code.toUpperCase() === (activeItem?.question.chapterCode || ledger.chapterCode).toUpperCase()
+      );
+      const res = await fetch('/api/questions/update-step', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          questionId: activeQid,
+          folder: chMatch?.folderName || ledger.chapterName,
+          steps: activeSteps,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        folder?: string;
+        file?: string;
+        error?: string;
+      };
+      if (!res.ok || !data.ok) {
+        const errMsg = data.error || 'Could not write to disk (saved in LocalStorage).';
+        setDiskSaveStatus({
+          qid: activeQid,
+          state: 'error',
+          message: errMsg,
+        });
+        emitStepRoutingStatus('Sync Error', errMsg, activeItem?.pathLabel);
+        return;
+      }
+      setDiskSaveStatus({
+        qid: activeQid,
+        state: 'saved',
+        message: `Saved to ${data.folder}/${data.file}`,
+      });
+      emitStepRoutingStatus(
+        'Verified',
+        `Saved Step-IDs for ${activeQid} to ${data.folder}/${data.file}.`,
+        activeItem?.pathLabel
+      );
+      window.dispatchEvent(new CustomEvent('angles:storage-updated', { detail: { source: 'disk-step' } }));
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : 'Disk write failed.';
+      setDiskSaveStatus({
+        qid: activeQid,
+        state: 'error',
+        message: errMsg,
+      });
+      emitStepRoutingStatus('Sync Error', errMsg, activeItem?.pathLabel);
+    }
   };
 
   const activeScoring = useMemo(
@@ -490,12 +728,12 @@ export const TrackerQuestionCards: React.FC<Props> = ({
             </span>
           </div>
 
-          {/* Right: Live Timer + Left/Right Arrow Navigation */}
-          <div className="flex flex-wrap items-center gap-2.5">
+          {/* Right: Live Timer + Scroll-Safe Left/Right Question Navigation */}
+          <div className="flex flex-wrap items-center gap-2.5 max-w-full min-w-0">
             {/* Per-Question Live Timer */}
             {executionModality !== 'study' && (
               <div
-                className={`px-3 py-1 rounded-md border text-xs font-bold flex items-center gap-1.5 ${
+                className={`px-3 py-1 rounded-md border text-xs font-bold flex items-center gap-1.5 shrink-0 ${
                   activeElapsedSeconds <= ledger.timing.fastLimit
                     ? 'bg-[#F0FDF4] text-[#15803D] border-[#BBF7D0]'
                     : activeElapsedSeconds <= ledger.timing.mediumLimit
@@ -513,21 +751,33 @@ export const TrackerQuestionCards: React.FC<Props> = ({
               </div>
             )}
 
-            {/* Left / Right Question Card Arrows */}
-            <div className="flex items-center gap-1">
+            {/* Left / Right Question Card Arrows + Dedicated Scrollable Q.No Pill Strip */}
+            <div className="flex items-center gap-1.5 max-w-full min-w-0">
               <button
                 type="button"
                 disabled={currentIndex === 0}
                 onClick={() => setCurrentIndex((prev) => Math.max(0, prev - 1))}
-                className="px-3 py-1 bg-white hover:bg-[#EFF6FF] disabled:opacity-40 text-[#111827] border border-[#DFDDD4] rounded-md text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer disabled:cursor-not-allowed"
+                className="px-3 py-1 bg-white hover:bg-[#EFF6FF] disabled:opacity-40 text-[#111827] border border-[#DFDDD4] rounded-md text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer disabled:cursor-not-allowed shrink-0"
                 title="Previous Question Card (Left Arrow Key)"
               >
                 <ArrowLeft className="w-3.5 h-3.5 text-[#1D4ED8]" />
                 <span>Prev</span>
               </button>
 
-              {/* Direct Card Pills (1..N — Zero Blank Pages) */}
-              <div className="hidden sm:flex items-center gap-1 px-1">
+              {/* Direct Card Pills (1..N — Horizontally Scrollable Safeguard for Large Question Sets) */}
+              <div
+                ref={pillStripRef}
+                onWheel={(e) => {
+                  const strip = pillStripRef.current;
+                  if (!strip || strip.scrollWidth <= strip.clientWidth) return;
+                  if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+                    e.preventDefault();
+                    strip.scrollLeft += e.deltaY;
+                  }
+                }}
+                aria-label="Question number selector"
+                className="relative hidden sm:flex items-center gap-1 px-1.5 py-0.5 overflow-x-auto max-w-[min(58vw,560px)] min-w-0 rounded-md border border-[#E5E3DC] bg-white/70 [scrollbar-width:thin]"
+              >
                 {selectedItems.map((item, idx) => {
                   const qid = item.question.uniqueId;
                   const hasPick = Boolean(pickedOptions[qid]);
@@ -536,8 +786,9 @@ export const TrackerQuestionCards: React.FC<Props> = ({
                     <button
                       key={qid}
                       type="button"
+                      data-pill-index={idx}
                       onClick={() => setCurrentIndex(idx)}
-                      className={`w-6 h-6 rounded text-[11px] font-bold transition-colors cursor-pointer ${
+                      className={`shrink-0 min-w-7 h-6 px-1.5 rounded text-[11px] font-bold transition-colors cursor-pointer ${
                         isCurrent
                           ? 'bg-[#1D4ED8] text-white'
                           : hasPick
@@ -555,12 +806,37 @@ export const TrackerQuestionCards: React.FC<Props> = ({
                 type="button"
                 disabled={isLastCard}
                 onClick={() => setCurrentIndex((prev) => Math.min(totalCards - 1, prev + 1))}
-                className="px-3 py-1 bg-white hover:bg-[#EFF6FF] disabled:opacity-40 text-[#111827] border border-[#DFDDD4] rounded-md text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer disabled:cursor-not-allowed"
+                className="px-3 py-1 bg-white hover:bg-[#EFF6FF] disabled:opacity-40 text-[#111827] border border-[#DFDDD4] rounded-md text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer disabled:cursor-not-allowed shrink-0"
                 title="Next Question Card (Right Arrow Key)"
               >
                 <span>Next</span>
                 <ArrowRight className="w-3.5 h-3.5 text-[#1D4ED8]" />
               </button>
+
+              {totalCards > 20 && (
+                <form
+                  onSubmit={handleJumpToQuestion}
+                  className="hidden md:flex items-center gap-1 shrink-0 ml-1"
+                  title={`Jump directly to any question (1–${totalCards})`}
+                >
+                  <input
+                    type="number"
+                    min={1}
+                    max={totalCards}
+                    value={jumpInput}
+                    onChange={(e) => setJumpInput(e.target.value.replace(/\D/g, ''))}
+                    placeholder={`1-${totalCards}`}
+                    aria-label="Jump to question number"
+                    className="w-16 px-2 py-1 text-[11px] font-mono bg-white border border-[#DFDDD4] rounded-md text-[#111827] focus:outline-none focus:border-[#1D4ED8]"
+                  />
+                  <button
+                    type="submit"
+                    className="px-2 py-1 bg-white hover:bg-[#EFF6FF] text-[#1D4ED8] border border-[#BFDBFE] rounded-md text-[11px] font-bold cursor-pointer"
+                  >
+                    Go
+                  </button>
+                </form>
+              )}
             </div>
           </div>
         </div>
@@ -574,9 +850,9 @@ export const TrackerQuestionCards: React.FC<Props> = ({
             <span className="px-2.5 py-1 bg-[#1D4ED8] text-white font-mono text-xs font-bold rounded shrink-0 mt-0.5">
               Q.No {currentIndex + 1}
             </span>
-            <p className="text-base sm:text-lg font-semibold text-[#111827] leading-relaxed">
-              {parsedCard.text}
-            </p>
+            <div className="text-base sm:text-lg font-semibold text-[#111827] leading-relaxed">
+              <MkmlRenderedBlock source={parsedCard.text} inline />
+            </div>
           </div>
 
           {/* OPTIONS Header + Correct Answer Status */}
@@ -632,7 +908,9 @@ export const TrackerQuestionCards: React.FC<Props> = ({
                       >
                         {opt.key}
                       </span>
-                      <span className="text-sm">{opt.label}</span>
+                      <span className="text-sm">
+                        <MkmlRenderedBlock source={opt.label} inline />
+                      </span>
                     </div>
 
                     {isCurrentCardRevealed && isCorrect && (
@@ -760,11 +1038,11 @@ export const TrackerQuestionCards: React.FC<Props> = ({
             >
               <div className="text-xs">
                 {isTestSubmitted ? (
-                  <div className="font-bold flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-[#15803D]" />
+                  <div className={`font-bold flex items-center gap-2 ${testDiskSaveStatus.state === 'error' ? 'text-[#B91C1C]' : ''}`}>
+                    <CheckCircle2 className={`w-4 h-4 ${testDiskSaveStatus.state === 'error' ? 'text-[#DC2626]' : 'text-[#15803D]'}`} />
                     <span>
-                      Test Submitted! All {totalCards} question attempts &amp; timers have been
-                      recorded into marks.tex and updated in Tracker Page 1.
+                      {testDiskSaveStatus.message ||
+                        `Test Submitted! All ${totalCards} question attempts & timers have been appended in A+1 format to tracker-ledger.json.`}
                     </span>
                   </div>
                 ) : isLastCard ? (
@@ -773,7 +1051,7 @@ export const TrackerQuestionCards: React.FC<Props> = ({
                       Last Question Card ({totalCards} of {totalCards}):
                     </strong>{' '}
                     Click <strong>Submit Test</strong> to reveal all answers, explanations, and
-                    record your marks into Tracker Page 1.
+                    append your selected options &amp; timings (A+1) to <code>tracker-ledger.json</code>.
                   </div>
                 ) : (
                   <div>
@@ -843,14 +1121,39 @@ export const TrackerQuestionCards: React.FC<Props> = ({
               </div>
 
               {isCurrentCardRevealed && (
-                <button
-                  type="button"
-                  onClick={handleAddExplanationStep}
-                  className="px-2.5 py-1 bg-[#EFF6FF] hover:bg-[#DBEAFE] text-[#1D4ED8] border border-[#BFDBFE] rounded text-xs font-mono font-bold flex items-center gap-1 cursor-pointer"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>+ Add Step</span>
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  {diskSaveStatus.qid === activeQid && diskSaveStatus.message && (
+                    <span
+                      className={`px-2 py-0.5 rounded border text-[11px] font-mono font-semibold ${
+                        diskSaveStatus.state === 'saved'
+                          ? 'bg-[#F0FDF4] text-[#15803D] border-[#BBF7D0]'
+                          : diskSaveStatus.state === 'error'
+                            ? 'bg-[#FEF2F2] text-[#B91C1C] border-[#FECACA]'
+                            : 'bg-[#EFF6FF] text-[#1D4ED8] border-[#BFDBFE]'
+                      }`}
+                    >
+                      {diskSaveStatus.message}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    disabled={diskSaveStatus.qid === activeQid && diskSaveStatus.state === 'saving'}
+                    onClick={() => void handleSaveStepsToDisk()}
+                    className="px-2.5 py-1 bg-[#F0FDF4] hover:bg-[#DCFCE7] text-[#15803D] border border-[#BBF7D0] rounded text-xs font-mono font-bold flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                    title="Write these steps and Step-IDs directly into this chapter's questions.html on disk"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    <span>Save Steps to Disk</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleAddExplanationStep}
+                    className="px-2.5 py-1 bg-[#EFF6FF] hover:bg-[#DBEAFE] text-[#1D4ED8] border border-[#BFDBFE] rounded text-xs font-mono font-bold flex items-center gap-1 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>+ Add Step</span>
+                  </button>
+                </div>
               )}
             </div>
 
@@ -868,61 +1171,136 @@ export const TrackerQuestionCards: React.FC<Props> = ({
               </div>
             ) : (
               <div className="p-4 space-y-3">
-                {activeSteps.map((step, sIdx) => (
-                  <div
-                    key={`${activeQid}-step-${sIdx}`}
-                    className="bg-white border border-[#DFDDD4] rounded-lg p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-                  >
-                    {/* Left: Step - N and editable explanation */}
-                    <div className="flex items-start gap-3 flex-1">
-                      <span className="px-2.5 py-1 bg-[#F5F4EF] border border-[#DFDDD4] rounded font-mono text-xs font-bold text-[#111827] shrink-0">
-                        Step - {sIdx + 1}
-                      </span>
-                      <input
-                        type="text"
-                        value={step.text}
-                        onChange={(e) => handleUpdateStepText(sIdx, e.target.value)}
-                        className="w-full px-2.5 py-1 text-sm bg-transparent border-b border-dashed border-[#D1CFC7] focus:outline-none focus:border-[#1D4ED8] text-[#111827]"
-                        placeholder={`Write Step - ${sIdx + 1} explanation...`}
-                      />
+                {activeSteps.map((step, sIdx) => {
+                  const stepKey = `${activeQid}:${sIdx}`;
+                  const isEditing = Boolean(editingStepKeys[stepKey]);
+                  const parsedIds = splitStepIds(step.stepId);
+                  const resolvedBadges = parsedIds.map((id) => resolveStepBadgeInfo(id));
+                  const primarySelectId =
+                    parsedIds.length === 1 && availableStepIdOptions.includes(parsedIds[0])
+                      ? parsedIds[0]
+                      : '';
+                  return (
+                    <div
+                      key={`${activeQid}-step-${sIdx}`}
+                      className="bg-white border border-[#DFDDD4] rounded-lg overflow-hidden"
+                    >
+                      {/* Clean Step Header: Step N · Permanent Full Base ID · Edit Toggle */}
+                      <div className="px-3 py-2 bg-[#F9F8F4] border-b border-[#ECEBE5] flex flex-wrap items-center justify-between gap-2 font-mono text-xs">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="px-2.5 py-0.5 bg-white border border-[#DFDDD4] rounded font-bold text-[#111827]">
+                            Step {step.stepNumber || sIdx + 1}
+                          </span>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {resolvedBadges.map((info, bIdx) => (
+                              <span
+                                key={`${info.id}-${bIdx}`}
+                                title={info.label}
+                                className="inline-flex items-center gap-1.5"
+                              >
+                                <span
+                                  className={`px-2 py-0.5 rounded text-[11px] font-bold border ${
+                                    info.kind === 'tu'
+                                      ? 'bg-[#FEF2F2] text-[#B91C1C] border-[#FECACA]'
+                                      : info.kind === 'tg'
+                                        ? 'bg-[#F1F5F9] text-[#334155] border-[#CBD5E1]'
+                                        : info.kind === 'unknown'
+                                          ? 'bg-[#FFFBEB] text-[#B45309] border-[#FDE68A]'
+                                          : 'bg-[#F0FDF4] text-[#15803D] border-[#BBF7D0]'
+                                  }`}
+                                >
+                                  {info.id}
+                                </span>
+                                {info.label && (
+                                  <span className="text-[11px] font-sans text-[#6B7280] hidden sm:inline">
+                                    {info.label}
+                                  </span>
+                                )}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setEditingStepKeys((prev) => ({
+                                ...prev,
+                                [stepKey]: !prev[stepKey],
+                              }))
+                            }
+                            className={`px-2 py-1 rounded border text-[11px] font-bold flex items-center gap-1 cursor-pointer ${
+                              isEditing
+                                ? 'bg-[#1D4ED8] text-white border-[#1D4ED8]'
+                                : 'bg-white text-[#374151] border-[#D1CFC7] hover:bg-[#EFF6FF]'
+                            }`}
+                            title="Edit MKML body and Step-ID"
+                          >
+                            {isEditing ? <Eye className="w-3 h-3" /> : <Code2 className="w-3 h-3" />}
+                            <span>{isEditing ? 'Done' : 'Edit'}</span>
+                          </button>
+
+                          {activeSteps.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteExplanationStep(sIdx)}
+                              className="p-1 text-[#DC2626] hover:bg-[#FEF2F2] rounded cursor-pointer"
+                              title="Delete step"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Step Body: Full MKML Rendering (Math, Diagrams, Tables, Rules, Traps, UD) or Inline MKML + ID Editor */}
+                      <div className="p-3 select-text">
+                        {isEditing ? (
+                          <div className="space-y-2">
+                            <div className="flex flex-wrap items-center gap-2 font-mono text-xs">
+                              <span className="text-[#6B7280] font-bold">Step ID:</span>
+                              <select
+                                value={primarySelectId}
+                                onChange={(e) => {
+                                  if (e.target.value) handleUpdateStepId(sIdx, e.target.value);
+                                }}
+                                className="px-2 py-1 bg-[#F0FDF4] text-[#15803D] border border-[#BBF7D0] rounded font-bold focus:outline-none cursor-pointer"
+                              >
+                                {!primarySelectId && (
+                                  <option value="">Custom ({step.stepId})</option>
+                                )}
+                                {availableStepIdOptions.map((code) => (
+                                  <option key={code} value={code}>
+                                    {code}
+                                  </option>
+                                ))}
+                              </select>
+                              <input
+                                type="text"
+                                value={step.stepId}
+                                onChange={(e) => handleUpdateStepId(sIdx, e.target.value)}
+                                className="w-60 px-2 py-1 font-bold bg-white border border-[#D1CFC7] rounded text-[#111827] focus:outline-none focus:border-[#1D4ED8]"
+                                placeholder="QA-TRG-BS-FR-MC1, TG, or Tu"
+                              />
+                            </div>
+                            <textarea
+                              rows={4}
+                              value={step.text}
+                              onChange={(e) => handleUpdateStepText(sIdx, e.target.value)}
+                              className="w-full px-2.5 py-2 text-xs font-mono bg-[#F9F8F4] border border-[#D1CFC7] rounded focus:outline-none focus:border-[#1D4ED8] text-[#111827]"
+                              placeholder={`Write full MKML for <step ${sIdx + 1} - ${step.stepId}> (supports <math == ...>, <box>, <line d>, <table r= c=>, <rule == ...>, <ud = ...>...)`}
+                            />
+                          </div>
+                        ) : (
+                          <div className="text-sm text-[#111827] leading-relaxed">
+                            <MkmlRenderedBlock source={step.text} />
+                          </div>
+                        )}
+                      </div>
                     </div>
-
-                    {/* Right: — Step - ID (e.g. T1, T2) */}
-                    <div className="flex items-center gap-2 shrink-0 font-mono text-xs">
-                      <span className="text-[#6B7280] font-bold">— Step-ID:</span>
-                      <select
-                        value={step.stepId}
-                        onChange={(e) => handleUpdateStepId(sIdx, e.target.value)}
-                        className="px-2.5 py-1 bg-[#F0FDF4] text-[#15803D] border border-[#BBF7D0] rounded font-bold focus:outline-none focus:border-[#15803D] cursor-pointer"
-                      >
-                        {availableStepIdOptions.map((code) => (
-                          <option key={code} value={code}>
-                            {code}
-                          </option>
-                        ))}
-                      </select>
-
-                      <input
-                        type="text"
-                        value={step.stepId}
-                        onChange={(e) => handleUpdateStepId(sIdx, e.target.value.toUpperCase())}
-                        className="w-16 px-2 py-1 text-center font-bold bg-white border border-[#D1CFC7] rounded text-[#111827] focus:outline-none focus:border-[#1D4ED8]"
-                        title="Custom Step-ID (e.g. T1, T2)"
-                      />
-
-                      {activeSteps.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteExplanationStep(sIdx)}
-                          className="p-1 text-[#DC2626] hover:bg-[#FEF2F2] rounded cursor-pointer"
-                          title="Delete step"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

@@ -38,13 +38,12 @@
           <p class="page-intro">Your notes live on disk, not in a fragile manifest. Select a folder to open the studio.</p>
         </div>
         <div class="header-actions">
-          <button class="button button-primary" id="new-chapter-button"><span>＋</span> New Chapter Folder</button>
           <button class="button button-quiet" id="refresh-button"><span class="button-icon">↻</span> Refresh Disk</button>
         </div>
       </div>
-      <div class="index-strip"><div><strong id="chapter-total">0</strong><span>chapters on disk</span></div><div><strong id="note-total">0</strong><span>HTML notes</span></div><div class="index-strip-note">Fast retrieval starts with a clean index.</div></div>
+      <div class="index-strip"><div><strong id="chapter-total">0</strong><span>chapters on disk</span></div><div><strong id="note-total">0</strong><span>HTML notes</span></div><div class="index-strip-note">Create &amp; register chapters in 10 Registry.</div></div>
       <div id="chapter-grid" class="chapter-grid" aria-live="polite"></div>
-      <div id="folder-empty" class="empty-state is-hidden"><span class="empty-glyph">＋</span><h2>No chapters yet.</h2><p>Create your first folder and give the page a point of view.</p><button class="button button-primary" data-action="new-chapter">Create a chapter</button></div>
+      <div id="folder-empty" class="empty-state is-hidden"><span class="empty-glyph">◇</span><h2>No chapters yet.</h2><p>Register a chapter inside 10 Registry to create its folder with clean cascading IDs.</p><button class="button button-primary" data-page="registry">Open 10 Registry</button></div>
     </section>
 
     <section class="page coding-page" id="coding-page" data-route="coding">
@@ -56,7 +55,7 @@
         </aside>
         <div class="editor-workspace">
           <div class="editor-header"><div><p class="kicker">/ 02 — CODING AREA</p><div class="editor-breadcrumb"><span id="editor-chapter-breadcrumb">Chapter</span><span>/</span><strong id="editor-file-name">Select a file</strong></div></div><div class="editor-tools"><span class="shortcut-hint">Ctrl+B sidebar <span>·</span> Alt+P preview</span><span class="save-status" id="save-status"><span class="status-dot"></span> Ready</span></div></div>
-          <div class="quick-toolbar" aria-label="Quick insert toolbar"><span class="toolbar-label">INSERT</span><button data-insert="math">Math</button><button data-insert="boxw">Box W (25% line)</button><button data-insert="lined">Line D (4mm top)</button><button data-insert="table"><span class="tool-key">Alt T</span> Table</button><button data-insert="question"><span class="tool-key">Alt Q</span> Question</button><button data-insert="tags">Study tags</button><button data-insert="grid"><span class="tool-key">Alt G</span> Grid box</button><span class="toolbar-spacer"></span><button id="open-preview-button" class="toolbar-preview"><span>↗</span> Open preview <span class="tool-key">Alt P</span></button></div>
+          <div class="quick-toolbar" aria-label="Quick insert toolbar"><span class="toolbar-label">INSERT</span><button data-insert="math">Math</button><button data-insert="boxw">Box W</button><button data-insert="enclave">Enclave</button><button data-insert="lined">Line D (floating)</button><button data-insert="arc">Arc</button><button data-insert="table"><span class="tool-key">Alt T</span> Table</button><button data-insert="question"><span class="tool-key">Alt Q</span> Question</button><button data-insert="tags">Study tags</button><button data-insert="grid"><span class="tool-key">Alt G</span> Grid box</button><span class="toolbar-spacer"></span><button id="open-preview-button" class="toolbar-preview"><span>↗</span> Open preview <span class="tool-key">Alt P</span></button></div>
           <div class="editor-shell"><div class="line-numbers" id="line-numbers" aria-hidden="true">1</div><textarea id="code-editor" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="Choose a file to begin writing…"></textarea></div>
           <div class="editor-footer"><span><span class="footer-key">MKML + HTML</span> syntax compiler active</span><span id="char-count">0 characters</span></div>
         </div>
@@ -84,7 +83,101 @@
     </section>
 
     <section class="page placeholder-page" id="graph-page" data-route="graph"><div class="placeholder-card"><span class="placeholder-number">04</span><p class="kicker">/ PHASE 2 — GRAPH</p><h1>A visual map<br><em>for later.</em></h1><p>Graph mode will turn your chapters into connected recall paths. The canvas is reserved.</p><span class="coming-label">COMING IN PHASE 2</span></div></section>
-    <section class="page placeholder-page" id="shortcuts-page" data-route="shortcuts"><div class="placeholder-card"><span class="placeholder-number">05</span><p class="kicker">/ PHASE 2 — SHORTCUTS</p><h1>Make speed<br><em>deliberate.</em></h1><p>Shortcut profiles and custom key bindings will live here. For now, the core editor bindings are visible in the coding area.</p><span class="coming-label">COMING IN PHASE 2</span></div></section>
+    <section class="page shortcuts-page" id="shortcuts-page" data-route="shortcuts">
+      <div class="page-header qi-header">
+        <div>
+          <p class="kicker">/ 05 — MKML SYNTAX &amp; SHORTCUTS</p>
+          <h1>Every custom tag.<br><em>One clean sheet.</em></h1>
+          <p class="page-intro">Complete reference for Angles MKML diagrams, step enclaves, permanent Base ID hierarchy, question routing, math shorthand, study tags, CSS grid helpers, and keyboard bindings.</p>
+        </div>
+      </div>
+
+      <div class="mkml-ref-grid">
+        <article class="panel mkml-ref-card">
+          <div class="panel-heading"><div><span class="panel-index">01 / HIERARCHY &amp; ROUTING</span><h2>Cascading Permanent IDs</h2></div></div>
+          <table class="mkml-ref-table">
+            <tbody>
+              <tr><td><code>&lt;Subtopic == QA-TRG-BS, name = Basics&gt;...&lt;/Subtopic&gt;</code></td><td>Tier 3 Subtopic container absorbed live by <strong>10 Registry</strong> (inherits Domain-Chapter prefix).</td></tr>
+              <tr><td><code>&lt;Concept == QA-TRG-BS-FR, name = Ratios&gt;...&lt;/Concept&gt;</code></td><td>Tier 4 Concept container absorbed live under its parent Subtopic.</td></tr>
+              <tr><td><code>&lt;MC == QA-TRG-BS-FR-MC1, name = Side Ratio&gt;...&lt;/MC&gt;</code></td><td>Tier 5 Micro Concept — permanent Full Base ID used for step tracking.</td></tr>
+              <tr><td><code>&lt;target == QA-TRG-BS-FR&gt;</code></td><td>Inside <code>&lt;Qn&gt;</code>: ships the question directly into the matching chapter’s <code>questions.html</code> and Concept bucket.</td></tr>
+              <tr><td><code>&lt;box points = (1,1),(8,1),(8,5),(1,5) path = QA-TRG-BS-FR&gt;&lt;/box&gt;</code></td><td>Portal box on the study canvas; keeps your authored box dimensions and opens Study / Shallow Mode for that path.</td></tr>
+            </tbody>
+          </table>
+        </article>
+
+        <article class="panel mkml-ref-card">
+          <div class="panel-heading"><div><span class="panel-index">02 / STEP ENCLAVE &amp; DIAGRAMS</span><h2>Grid Geometry &amp; Labels</h2></div></div>
+          <table class="mkml-ref-table">
+            <tbody>
+              <tr><td><code>&lt;enclave points = (1,1),(13,1),(13,6),(1,6) background-color = #FFFFFF color = #CBD5E1&gt;&lt;/enclave&gt;</code></td><td><strong>One per <code>&lt;step&gt;</code> max.</strong> Rips that exact grid rectangle as the step’s viewport; supports all <code>&lt;box&gt;</code> attributes &amp; shorthand <code>&lt;enclave = (x1,y1),(x2,y2)&gt;</code>.</td></tr>
+              <tr><td><code>&lt;box points = (x1,y1),(x2,y2),(x3,y3),(x4,y4) background-color = #FFF color = #123&gt;Body&lt;/box&gt;</code></td><td>4-point perimeter polygon box on the grid. Aliases: <code>bg-color</code>, <code>text-color</code>.</td></tr>
+              <tr><td><code>&lt;box w points = (x1,y1),(x2,y2),(x3,y3),(x4,y4) text-color = #0F172A&gt;Label&lt;/box w&gt;</code></td><td>Clean borderless grid text block (no box outline or underline; rotates along angled bottom edge if slanted).</td></tr>
+              <tr><td><code>&lt;line color = #2563EB&gt;(1,1),(4,1),(4,5)&lt;/line&gt;</code></td><td>Standard grid polyline drawn underneath boxes (hex colors only).</td></tr>
+              <tr><td><code>&lt;line m color = #EF4444&gt;(2,3),(8,3)&lt;/line m&gt;</code></td><td>Priority over-box polyline drawn above boxes.</td></tr>
+              <tr><td><code>&lt;line d line-color = #2563EB text-color = #1D4ED8 floating = 1.5mm&gt;(2,5),(2,2) O = 4&lt;/line d&gt;</code></td><td>Labeled over-box connector with upright text floating <code>±Xmm</code> from the line (negative flips side).</td></tr>
+              <tr><td><code>&lt;arc points = (2,6) (8,6) depth = 1.2 color = #D97706 text-color = #B45309 floating = 1.5mm&gt;θ&lt;/arc&gt;</code></td><td>Curved quadratic arc between 2 points (supports decimals &amp; negative depth). Use <code>&lt;arc m ...&gt;...&lt;/arc m&gt;</code> to draw above boxes.</td></tr>
+            </tbody>
+          </table>
+        </article>
+
+        <article class="panel mkml-ref-card">
+          <div class="panel-heading"><div><span class="panel-index">03 / QUESTIONS &amp; STEPPED EXPLANATIONS</span><h2>Quiz &amp; PYQ Batch Format</h2></div></div>
+          <table class="mkml-ref-table">
+            <tbody>
+              <tr><td><code>&lt;qn all mode = exam&gt; ... &lt;/qn all&gt;</code></td><td>Quiz group container (<code>mode = normal</code> default, or <code>mode = exam</code> with single Submit footer).</td></tr>
+              <tr><td><code>&lt;Qn&gt; ... &lt;/Qn&gt;</code></td><td>Individual question block inside <code>&lt;qn all&gt;</code> or <code>questions.html</code>.</td></tr>
+              <tr><td><code>&lt;id == QA-TRG-BS-FR-1&gt;</code></td><td>Permanent unique Question ID (used for Tracker history and disk step write-back).</td></tr>
+              <tr><td><code>&lt;type = Quantitative Aptitude&gt;</code></td><td>Question format tag for Question Index breakdown.</td></tr>
+              <tr><td><code>&lt;text = Find &lt;math == sin A&gt;.&gt;</code></td><td>Question prompt (supports inline math, tables, and study tags).</td></tr>
+              <tr><td><code>&lt;Options&gt;&lt;A = ...&gt;&lt;B = ...&gt;&lt;C = ...&gt;&lt;D = ...&gt;&lt;/Options&gt;</code></td><td>Answer choices block, paired with <code>&lt;answer = A&gt;</code>.</td></tr>
+              <tr><td><code>&lt;explanation&gt;&lt;step 1 - QA-TRG-BS-FR-MC1&gt;...&lt;/step 1&gt;&lt;step 2 - Tu&gt;...&lt;/step 2&gt;&lt;/explanation&gt;</code></td><td>Step-by-step explanation tagged with permanent Full Base IDs, <code>TG</code> (general), or <code>Tu</code> (unmapped gap).</td></tr>
+            </tbody>
+          </table>
+        </article>
+
+        <article class="panel mkml-ref-card">
+          <div class="panel-heading"><div><span class="panel-index">04 / MATH SHORTHAND</span><h2>Inline &lt;math == ...&gt; (Offline KaTeX)</h2></div></div>
+          <table class="mkml-ref-table">
+            <tbody>
+              <tr><td><code>&lt;math == a/b&gt;</code> / <code>&lt;math == (a+b)/(c+d)&gt;</code></td><td>Display fraction <code>\dfrac{a}{b}</code>.</td></tr>
+              <tr><td><code>&lt;math == a * b&gt;</code> · <code>&lt;math == x // y&gt;</code> · <code>&lt;math == a div b&gt;</code></td><td>Multiplication (<code>×</code>) and division (<code>÷</code>).</td></tr>
+              <tr><td><code>&lt;math == sqrt(x^2 + 1)&gt;</code> · <code>&lt;math == cbrt(27)&gt;</code></td><td>Square root and cube root (supports nesting).</td></tr>
+              <tr><td><code>&lt;math == tri ABC ~= tri DEF&gt;</code></td><td>Triangle symbol (<code>△</code>) and congruence (<code>≅</code>).</td></tr>
+              <tr><td><code>&lt;math == theta, alpha, beta, pi, inf, &lt;=, &gt;=, !=&gt;</code></td><td>Greek letters, infinity, and comparison operators.</td></tr>
+            </tbody>
+          </table>
+        </article>
+
+        <article class="panel mkml-ref-card">
+          <div class="panel-heading"><div><span class="panel-index">05 / STUDY TAGS, TABLES &amp; CSS GRID</span><h2>Notes, Callouts &amp; Styles</h2></div></div>
+          <table class="mkml-ref-table">
+            <tbody>
+              <tr><td><code>&lt;table r = 2 c = 2&gt;&lt;c11 = A&gt;&lt;c12 = B&gt;&lt;c21 = C&gt;&lt;c22 = D&gt;&lt;/table&gt;</code></td><td>Compact MKML table (cells support nested HTML/MKML).</td></tr>
+              <tr><td><code>&lt;ud = label&gt;word&lt;/ud&gt;</code> · <code>&lt;ud = n **rl**&gt;word&lt;/ud&gt;</code></td><td>Underlined grammar/concept label; add <code>**rl**</code> to hide until reveal in questions.</td></tr>
+              <tr><td><code>&lt;x = wrong&gt;</code> · <code>&lt;ok = right&gt;</code> · <code>&lt;hide == spoiler&gt;</code></td><td>Inline strike/check highlights and click-to-reveal spoiler.</td></tr>
+              <tr><td><code>&lt;rule == ...&gt;</code> · <code>&lt;trap == ...&gt;</code> · <code>&lt;chain == A -&gt; B -&gt; C&gt;</code></td><td>Rule callout, exam-trap warning, and arrowed reasoning chain.</td></tr>
+              <tr><td><code>&lt;grid pos="2, 4" span="11, 8"&gt;...&lt;/grid&gt;</code></td><td>Explicit grid card placement on the <code>03 Preview</code> sheet.</td></tr>
+              <tr><td><code>&lt;css-id: 123&gt;</code> · <code>&lt;link-css-id: 123&gt;</code> · <code>grid-text-align: (col, row);</code></td><td>Scoped stylesheet linking between chapter <code>.css</code> and <code>.html</code> notes, plus exact CSS coordinate anchoring.</td></tr>
+            </tbody>
+          </table>
+        </article>
+
+        <article class="panel mkml-ref-card">
+          <div class="panel-heading"><div><span class="panel-index">06 / KEYBOARD SHORTCUTS</span><h2>Editor, Preview &amp; Study Cards</h2></div></div>
+          <table class="mkml-ref-table">
+            <tbody>
+              <tr><td><kbd>Ctrl</kbd> + <kbd>B</kbd></td><td>Toggle Chapter Files sidebar in <strong>02 Coding Area</strong>.</td></tr>
+              <tr><td><kbd>Alt</kbd> + <kbd>P</kbd></td><td>Flush save and jump straight to <strong>03 Preview</strong>.</td></tr>
+              <tr><td><kbd>Alt</kbd> + <kbd>T</kbd> · <kbd>Alt</kbd> + <kbd>Q</kbd> · <kbd>Alt</kbd> + <kbd>G</kbd></td><td>Quick-insert Table, Question, or Grid box in Editor (and toggle Grid overlay in Preview).</td></tr>
+              <tr><td><kbd>Alt</kbd> + <kbd>+</kbd> · <kbd>Alt</kbd> + <kbd>−</kbd> · <kbd>F11</kbd></td><td>Zoom in/out (5%–300%) and toggle immersive fullscreen in <strong>03 Preview</strong>.</td></tr>
+              <tr><td><kbd>Middle-drag</kbd></td><td>Pan freely across the infinite grid canvas in <strong>03 Preview</strong>.</td></tr>
+              <tr><td><kbd>←</kbd> / <kbd>→</kbd></td><td>Move cleanly between Question Cards in Study / Shallow / Test Mode (without horizontal page scroll).</td></tr>
+            </tbody>
+          </table>
+        </article>
+      </div>
+    </section>
     <section class="page settings-page" id="settings-page" data-route="settings">
       <div class="page-header qi-header">
         <div>
@@ -138,14 +231,14 @@
     </section>
 
     <section class="page question-index-page" id="question-index-page" data-route="question-index">
-      <div class="page-header qi-header"><div><p class="kicker">/ 07 — QUESTION INDEX</p><h1>Test the batch.<br><em>See what’s missing.</em></h1><p class="page-intro">Paste a question batch. Completion is calculated only from this paste.</p></div><button class="button button-quiet" id="qi-refresh">↻ Refresh index</button></div>
+      <div class="page-header qi-header"><div><p class="kicker">/ 07 — QUESTION INDEX (FULL BASE ID &amp; Tu COVERAGE)</p><h1>Test the PYQ batch.<br><em>Ship straight to question banks.</em></h1><p class="page-intro">Paste a PYQ set with solving steps tagged by permanent Full Base IDs (e.g. <code>QA-TRG-BS-FR-MC1</code>), <code>TG</code>, or <code>Tu</code>. Even one <code>Tu</code> step marks a question uncovered. Saving appends directly to the chapter’s <code>questions.html</code> via <code>&lt;target == ...&gt;</code> without touching study graphs.</p></div><button class="button button-quiet" id="qi-refresh">↻ Refresh index</button></div>
       <div class="qi-primary">
-        <section class="qi-ingest panel"><div class="panel-heading"><div><span class="panel-index">A / PASTED QUESTIONS</span><h2>Paste batch</h2></div><span class="local-only">LOCAL · NO LLM</span></div><label class="sr-only" for="qi-input">Question batch</label><textarea id="qi-input" spellcheck="false" placeholder="Paste <Qn>…</Qn> questions here"></textarea><div id="qi-batch-completion" class="qi-batch-completion" aria-live="polite">PASTED-BATCH COMPLETION · no questions yet</div><div class="qi-actions"><button class="button button-quiet" id="qi-dry-run">Preview routing</button><button class="button button-primary" id="qi-commit" disabled>Commit batch</button></div><div id="qi-preview" class="qi-preview" aria-live="polite"><p>Preview checks question fields and destinations before anything is saved.</p></div><div class="qi-actions qi-resync"><button class="button button-quiet" id="qi-resync">Re-sync mapped questions</button><span id="qi-status">Ready for a batch.</span></div></section>
-        <section class="panel qi-batch-report"><div class="panel-heading"><div><span class="panel-index">B / BATCH RESULTS</span><h2>Completion by scope</h2></div></div><div class="qi-report-wrap"><table class="qi-report-table"><thead><tr><th scope="col">Scope</th><th scope="col">Questions</th><th scope="col">UN</th><th scope="col">Complete</th><th scope="col">Completion</th></tr></thead><tbody id="qi-batch-results"><tr><td colspan="5" class="qi-report-empty">Paste a batch to calculate completion.</td></tr></tbody></table></div></section>
+        <section class="qi-ingest panel"><div class="panel-heading"><div><span class="panel-index">A / PYQ BATCH INPUT</span><h2>Paste PYQ set</h2></div><span class="local-only">FULL BASE ID · AUTO-SHIP</span></div><label class="sr-only" for="qi-input">Question batch</label><textarea id="qi-input" spellcheck="false" placeholder="Paste <Qn>…</Qn> with <target == QA-TRG-BS-FR> and <explanation><step 1 - QA-TRG-BS-FR-MC1>…</step 1><step 2 - Tu>…</step 2></explanation>"></textarea><div id="qi-batch-completion" class="qi-batch-completion" aria-live="polite">PYQ STEP COVERAGE · no questions yet</div><div class="qi-actions"><button class="button button-quiet" id="qi-dry-run">Validate &amp; preview routes</button><button class="button button-primary" id="qi-commit" disabled>Ship batch to questions.html</button></div><div id="qi-preview" class="qi-preview" aria-live="polite"><p>Validate checks every question’s <code>&lt;step N - BaseID&gt;</code> tags against the live Micro Concept Registry and shows which chapter <code>questions.html</code> each question will fly to.</p></div><div class="qi-actions qi-resync"><span id="qi-status">Ready for a PYQ batch.</span></div></section>
+        <section class="panel qi-batch-report"><div class="panel-heading"><div><span class="panel-index">B / STEP BASE-ID BREAKDOWN</span><h2>Micro-concept usage &amp; Tu gaps</h2></div></div><div class="qi-report-wrap"><table class="qi-report-table"><thead><tr><th scope="col">Step Base ID</th><th scope="col">Micro Concept</th><th scope="col">Questions</th><th scope="col">Steps</th><th scope="col">Status</th></tr></thead><tbody id="qi-batch-results"><tr><td colspan="5" class="qi-report-empty">Paste a PYQ batch to calculate Step Base-ID coverage.</td></tr></tbody></table></div><div class="gap-heading" style="margin-top:16px"><span class="panel-index">BATCH Tu GAPS</span><span>Steps labelled &lt;step N - Tu&gt; needing new Micro Concepts</span></div><div id="qi-batch-gaps" class="gap-list"><p class="qi-empty">No Tu gaps in current paste.</p></div></section>
       </div>
-      <details class="qi-secondary"><summary>Saved index and question-type analytics</summary>
-        <div class="qi-secondary-content"><section class="qi-dashboard"><div class="panel qi-macro"><div class="panel-heading"><div><span class="panel-index">SAVED INDEX</span><h2>Stored question volume</h2></div></div><div class="qi-chapter-columns"><span>CHAPTER</span><span>VOLUME</span><span>SHARE</span><span>STORED COVERAGE</span></div><div id="qi-chapter-list" class="qi-bars"></div></div><div class="panel qi-detail"><div class="panel-heading"><div><span class="panel-index">CHAPTER DETAIL</span><h2>Concept frequency</h2></div><select id="qi-chapter-select" aria-label="Select chapter"></select></div><div id="qi-readiness" class="readiness-card"></div><div id="qi-concept-list" class="qi-bars"></div><div class="gap-heading"><span class="panel-index">UNMAPPED GAPS</span><span>Optional &lt;gap = …&gt; · no label → General Unmapped</span></div><div id="qi-gap-list" class="gap-list"></div></div></section><div id="qi-unassigned" class="unassigned-list"></div>
-        <section class="panel qi-type-panel" aria-labelledby="qi-type-title"><div class="panel-heading"><div><span class="panel-index">QUESTION FORMAT</span><h2 id="qi-type-title">Question-type breakdown</h2></div><span class="local-only">UNIQUE COUNTS</span></div><div class="qi-type-controls"><div><span class="qi-control-label">QUESTION TYPE</span><div id="qi-type-pills" class="qi-type-pills"></div></div><label class="qi-folder-filter"><span class="qi-control-label">FOLDER FILTER</span><select id="qi-type-folder-filter" aria-label="Filter question-type breakdown by folder"></select></label></div><div class="qi-type-chart-head"><span>FOLDER (ROOT MID)</span><span>QUESTION COUNT</span><span>SHARE</span></div><div id="qi-type-folder-ranking" class="qi-type-ranking"></div></section></div>
+      <details class="qi-secondary"><summary>Saved notes Step-ID coverage &amp; question-type analytics</summary>
+        <div class="qi-secondary-content"><section class="qi-dashboard"><div class="panel qi-macro"><div class="panel-heading"><div><span class="panel-index">SAVED NOTES</span><h2>Stored question volume</h2></div></div><div class="qi-chapter-columns"><span>CHAPTER</span><span>VOLUME</span><span>SHARE</span><span>STEP COVERAGE</span></div><div id="qi-chapter-list" class="qi-bars"></div></div><div class="panel qi-detail"><div class="panel-heading"><div><span class="panel-index">CHAPTER DETAIL</span><h2>Step-ID frequency</h2></div><select id="qi-chapter-select" aria-label="Select chapter"></select></div><div id="qi-readiness" class="readiness-card"></div><div id="qi-concept-list" class="qi-bars"></div><div class="gap-heading"><span class="panel-index">STORED Tu GAPS</span><span>Steps tagged Tu in saved chapter notes</span></div><div id="qi-gap-list" class="gap-list"></div></div></section>
+        <section class="panel qi-type-panel" aria-labelledby="qi-type-title"><div class="panel-heading"><div><span class="panel-index">QUESTION FORMAT</span><h2 id="qi-type-title">Question-type breakdown</h2></div><span class="local-only">UNIQUE COUNTS</span></div><div class="qi-type-controls"><div><span class="qi-control-label">QUESTION TYPE</span><div id="qi-type-pills" class="qi-type-pills"></div></div><label class="qi-folder-filter"><span class="qi-control-label">CHAPTER FILTER</span><select id="qi-type-folder-filter" aria-label="Filter question-type breakdown by chapter"></select></label></div><div class="qi-type-chart-head"><span>CHAPTER</span><span>QUESTION COUNT</span><span>SHARE</span></div><div id="qi-type-folder-ranking" class="qi-type-ranking"></div></section></div>
       </details>
     </section>
 

@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   Activity,
   FileJson,
@@ -15,16 +15,11 @@ import {
   type DashboardSectionMode,
   type DomainItem,
   type ChapterItem,
-  type SubtopicItem,
-  type ConceptItem,
-  type MicroConceptItem,
   type ExamProfile,
   INITIAL_DOMAINS,
   INITIAL_CHAPTERS,
-  INITIAL_SUBTOPICS,
-  INITIAL_CONCEPTS,
-  INITIAL_MICRO_CONCEPTS,
   INITIAL_EXAMS,
+  isTestingDomain,
 } from './ExamRegistryDashboard';
 import { TrackerPageTwo } from './TrackerPageTwo';
 import { TrackerQuestionIndex } from './TrackerQuestionIndex';
@@ -37,14 +32,24 @@ import {
   type TestSessionRecord,
 } from './TrackerTestAnalysis';
 import {
-  DEFAULT_STEPS_BY_UNIQUE_ID,
+  CHAPTER_MKML_STORAGE,
   scanChapterStorageAndMarks,
   type ExplanationStepItem,
 } from '../utils/mkmlStorageScanner';
 import {
   loadPersistedTrackerState,
   savePersistedTrackerState,
+  loadDiskTrackerState,
+  saveDiskTrackerState,
 } from '../utils/trackerLocalStorage';
+import {
+  absorbLiveRegistryFromFiles,
+  type DiskChapterFolder,
+} from '../utils/registryAbsorber';
+import {
+  QuestionRoutingStatus,
+  type QuestionRoutingStatusState,
+} from './QuestionRoutingStatus';
 
 export type AttemptStatus = 'C' | 'W' | 'S';
 // [status, seconds, accuracyMark, timeMark, option]
@@ -65,91 +70,30 @@ export interface ChapterLedger {
   concepts: Record<string, Record<string, AttemptTuple[]>>;
 }
 
-// Helper to build a pre-populated chapter ledger that yields an exact target TCR = (LTM / MM) * 100
-function createSeededChapterLedger(
+// Clean empty chapter ledger (0 questions, 0 marks) for chapters that do not yet have subtopics/marks
+function createEmptyChapterLedger(
   chapterCode: string,
   chapterName: string,
-  fastCorrectedCount: number,
-  medCorrectedCount: number,
-  notAskedCount: number,
-  fastLimit = 45,
-  mediumLimit = 75,
-  slowLimit = 110
+  fastLimit = 30,
+  mediumLimit = 60,
+  slowLimit = 90
 ): ChapterLedger {
-  const qMap: Record<string, AttemptTuple[]> = {};
-  let qIdx = 1;
-  for (let i = 0; i < fastCorrectedCount; i++) {
-    // Each fast correct gives +1 acc + 2 time = 3.0 LTM
-    qMap[`${chapterCode}-C1-Qn${qIdx++}`] = [['C', Math.max(10, fastLimit - 10), 1, 2, 'A']];
-  }
-  for (let i = 0; i < medCorrectedCount; i++) {
-    // Each med correct gives +1 acc + 1 time = 2.0 LTM
-    qMap[`${chapterCode}-C1-Qn${qIdx++}`] = [['C', fastLimit + 10, 1, 1, 'B']];
-  }
-  for (let i = 0; i < notAskedCount; i++) {
-    // Each not asked gives 0 LTM (still adds +3 to MM = TQ * 3)
-    qMap[`${chapterCode}-C1-Qn${qIdx++}`] = [];
-  }
   return {
     chapterCode,
     chapterName,
-    evaluationDate: '19/11/2026',
+    evaluationDate: '20/11/2026',
     timing: {
       fastLimit,
       mediumLimit,
       slowLimit,
-      locked: true,
+      locked: false,
     },
-    concepts: {
-      C1: qMap,
-    },
+    concepts: {},
   };
 }
 
 const INITIAL_LEDGERS: Record<string, ChapterLedger> = {
-  // 1) TD: Exact 7.3 / 18 = 40.556% (Part 1) AND exact 1.1) V1 = 2.5 / 6 = 41.67% (Part 2)
-  // Using Chained Unique Question IDs: <Domain-Chapter-Subtopic-Concept-x_n>
-  TD: {
-    chapterCode: 'TD',
-    chapterName: 'Time and Distance',
-    evaluationDate: '28/09/2026',
-    timing: {
-      fastLimit: 60,
-      mediumLimit: 90,
-      slowLimit: 120,
-      locked: true,
-    },
-    concepts: {
-      'BWR-V1': {
-        'QA-TD-BWR-V1-1': [
-          ['C', 52, 1, 2, 'A'],
-          ['C', 41, 1, 2, 'A'],
-        ],
-        'QA-TD-BWR-V1-2': [
-          ['C', 72, 1, 1, 'B'],
-          ['W', 75, -0.5, 0, 'D'],
-        ],
-      },
-      'BWR-V2': {
-        'QA-TD-BWR-V2-1': [
-          ['C', 54, 1, 2, 'B'],
-          ['C', 48, 1, 2, 'B'],
-        ],
-      },
-      'RST-V1': {
-        'QA-TD-RST-V1-1': [
-          ['C', 50, 1, 2, 'B'],
-          ['C', 74, 1, 1, 'C'],
-        ],
-        'QA-TD-RST-V1-2': [
-          ['C', 78, 1, 1, 'B'],
-          ['S', 36, -0.2, 0, '-'],
-        ],
-        'QA-TD-RST-V1-3': [], // Not asked yet (Pending)
-      },
-    },
-  },
-  // 2) TRG: All 23 Questions from 18-Page Notebook PDF (<Subtopic == QA-TRG-BS> -> <Concept == QA-TRG-BS-FR>)
+  // QA: Trigonometry (only chapter authored with the new 5-tier hierarchy syntax)
   TRG: {
     chapterCode: 'TRG',
     chapterName: 'Trigonometry',
@@ -246,75 +190,17 @@ const INITIAL_LEDGERS: Record<string, ChapterLedger> = {
           ['C', 73, 1, 1, 'A'],
           ['S', 35, -0.2, 0, '-'],
         ],
-        'QA-TRG-BS-FR-22': [], // Unattempted in storage for testing fresh evaluation
-        'QA-TRG-BS-FR-23': [], // Unattempted in storage for testing fresh evaluation
+        'QA-TRG-BS-FR-22': [],
+        'QA-TRG-BS-FR-23': [],
       },
     },
   },
-  // PL: 12 Fast Correct (36 LTM) / 20 Total Qs (MM=60) => 60.000% TCR
-  PL: createSeededChapterLedger('PL', 'Profit and Loss', 12, 0, 8, 45, 75, 110),
-  // ALG: 10 Fast Correct (30 LTM) / 20 Total Qs (MM=60) => 50.000% TCR
-  ALG: createSeededChapterLedger('ALG', 'Algebra', 10, 0, 10, 45, 75, 110),
-  // GEO: 6 Fast Correct (18 LTM) / 20 Total Qs (MM=60) => 30.000% TCR
-  GEO: createSeededChapterLedger('GEO', 'Geometry', 6, 0, 14, 50, 80, 120),
-  // TW: 5 Fast Correct (15 LTM) / 10 Total Qs (MM=30) => 50.000% TCR
-  TW: createSeededChapterLedger('TW', 'Time and Work', 5, 0, 5, 45, 75, 110),
-
-  // English Language (Eng) chapters for SSC CHSL sample report
-  // PN: 17 Fast Correct (51 LTM) / 20 Total Qs (MM=60) => 85.000% TCR
-  PN: createSeededChapterLedger('PN', 'Pronouns', 17, 0, 3, 25, 50, 80),
-  // VB: 16 Fast Correct (48 LTM) / 20 Total Qs (MM=60) => 80.000% TCR
-  VB: createSeededChapterLedger('VB', 'Verbs & Tenses', 16, 0, 4, 25, 50, 80),
-  // ADJ: 4 Fast Correct (12 LTM) / 20 Total Qs (MM=60) => 20.000% TCR
-  ADJ: createSeededChapterLedger('ADJ', 'Adjectives', 4, 0, 16, 25, 50, 80),
-  // VOC: 12 Fast Correct (36 LTM) / 20 Total Qs (MM=60) => 60.000% TCR
-  VOC: createSeededChapterLedger('VOC', 'Vocabulary & Cloze', 12, 0, 8, 20, 40, 60),
-
-  // General Intelligence & Reasoning (GI) chapters
-  // SER: 16 Fast Correct (48 LTM) / 20 Total Qs (MM=60) => 80.000% TCR
-  SER: createSeededChapterLedger('SER', 'Number & Letter Series', 16, 0, 4, 35, 60, 90),
-  // ANA: 14 Fast Correct (42 LTM) / 20 Total Qs (MM=60) => 70.000% TCR
-  ANA: createSeededChapterLedger('ANA', 'Analogy & Classification', 14, 0, 6, 30, 55, 85),
-  // COD: 12 Fast Correct (36 LTM) / 20 Total Qs (MM=60) => 60.000% TCR
-  COD: createSeededChapterLedger('COD', 'Coding-Decoding', 12, 0, 8, 35, 60, 90),
-
-  // General Studies (GS) chapters
-  // POL: 10 Fast Correct (30 LTM) / 20 Total Qs (MM=60) => 50.000% TCR
-  POL: createSeededChapterLedger('POL', 'Indian Polity', 10, 0, 10, 20, 40, 60),
-  // HIS: 8 Fast Correct (24 LTM) / 20 Total Qs (MM=60) => 40.000% TCR
-  HIS: createSeededChapterLedger('HIS', 'History & Culture', 8, 0, 12, 20, 40, 60),
-  // SCI: 7 Fast Correct (21 LTM) / 20 Total Qs (MM=60) => 35.000% TCR
-  SCI: createSeededChapterLedger('SCI', 'General Science', 7, 0, 13, 20, 40, 60),
-
-  // Basics clean skeleton
-  BS: {
-    chapterCode: 'BS',
-    chapterName: 'Basics',
-    evaluationDate: '16/11/2026',
-    timing: {
-      fastLimit: 30,
-      mediumLimit: 60,
-      slowLimit: 90,
-      locked: false,
-    },
-    concepts: {
-      UN: {
-        'BS-UN-Qn1': [],
-        'BS-UN-Qn2': [],
-        'BS-UN-Qn3': [],
-        'BS-UN-Qn4': [],
-        'BS-UN-Qn5': [],
-        'BS-UN-Qn6': [],
-        'BS-UN-Qn7': [],
-        'BS-UN-Qn8': [],
-        'BS-UN-Qn9': [],
-        'BS-UN-Qn10': [],
-        'BS-UN-Qn11': [],
-        'BS-UN-Qn12': [],
-        'BS-UN-Qn13': [],
-      },
-    },
-  },
+  // English Language (Eng) — real disk chapters with no subtopic tags or marks yet
+  PC: createEmptyChapterLedger('PC', 'Phrases and Clauses'),
+  TE: createEmptyChapterLedger('TE', 'Tenses'),
+  VB: createEmptyChapterLedger('VB', 'Verb'),
+  PN: createEmptyChapterLedger('PN', 'Pronoun New'),
+  SVA: createEmptyChapterLedger('SVA', 'Subject-Verb Agreement'),
 };
 
 function computeAttemptMarks(
@@ -369,34 +255,6 @@ const INITIAL_TEST_SESSIONS: TestSessionRecord[] = [
     ],
     createdAt: '19/11/2026',
   },
-  {
-    id: 'test-1',
-    label: 'test id(1)',
-    chapterCode: 'TD',
-    questionUniqueIds: ['QA-TD-BWR-V1-1', 'QA-TD-BWR-V1-2', 'QA-TD-BWR-V2-1'],
-    createdAt: '17/11/2026',
-  },
-  {
-    id: 'test-2',
-    label: 'test id(2)',
-    chapterCode: 'TD',
-    questionUniqueIds: ['QA-TD-RST-V1-1', 'QA-TD-RST-V1-2', 'QA-TD-RST-V1-3'],
-    createdAt: '18/11/2026',
-  },
-  {
-    id: 'test-3',
-    label: 'test id(3)',
-    chapterCode: 'TD',
-    questionUniqueIds: [
-      'QA-TD-BWR-V1-1',
-      'QA-TD-BWR-V1-2',
-      'QA-TD-BWR-V2-1',
-      'QA-TD-RST-V1-1',
-      'QA-TD-RST-V1-2',
-      'QA-TD-RST-V1-3',
-    ],
-    createdAt: '19/11/2026',
-  },
 ];
 
 export const TrackerPageOne: React.FC = () => {
@@ -406,10 +264,8 @@ export const TrackerPageOne: React.FC = () => {
       ledgers: INITIAL_LEDGERS,
       domains: INITIAL_DOMAINS,
       chapters: INITIAL_CHAPTERS,
-      subtopics: INITIAL_SUBTOPICS,
-      concepts: INITIAL_CONCEPTS,
-      microConcepts: INITIAL_MICRO_CONCEPTS,
-      stepsByQid: DEFAULT_STEPS_BY_UNIQUE_ID,
+      stepIdOverrides: {} as Record<string, string>,
+      stepsByQid: {} as Record<string, ExplanationStepItem[]>,
       testSessions: INITIAL_TEST_SESSIONS,
       activeTestSessionId: 'test-trg-1',
       exams: INITIAL_EXAMS,
@@ -443,14 +299,340 @@ export const TrackerPageOne: React.FC = () => {
   const [showJsonModal, setShowJsonModal] = useState<boolean>(false);
   const [copiedJson, setCopiedJson] = useState<boolean>(false);
 
-  // Shared 5-Tier Registry State (drives both Registry 5 Pages and Part 2 MKML Tag Scanner)
+  // Permanent Tier 1 (Domains) & Tier 2 (Chapters) Registry State + Optional 1-to-1 Step ID Swaps
   const [domains, setDomains] = useState<DomainItem[]>(initialHydrated.domains);
   const [chapters, setChapters] = useState<ChapterItem[]>(initialHydrated.chapters);
-  const [subtopics, setSubtopics] = useState<SubtopicItem[]>(initialHydrated.subtopics);
-  const [concepts, setConcepts] = useState<ConceptItem[]>(initialHydrated.concepts);
-  const [microConcepts, setMicroConcepts] = useState<MicroConceptItem[]>(
-    initialHydrated.microConcepts
+  const [stepIdOverrides, setStepIdOverrides] = useState<Record<string, string>>(
+    initialHydrated.stepIdOverrides
   );
+
+  // Live Disk Folders fetched dynamically from `/api/registry/files` (Subtopics, Concepts, MCs NEVER saved permanently)
+  const [diskFolders, setDiskFolders] = useState<DiskChapterFolder[]>([]);
+  const [diskSyncStatus, setDiskSyncStatus] = useState<'loading' | 'synced' | 'offline'>('loading');
+  const [draftRevision, setDraftRevision] = useState<number>(0);
+
+  const [routingState, setRoutingState] = useState<QuestionRoutingStatusState>(() => {
+    const existing = (
+      window as unknown as { __anglesRoutingStatus?: QuestionRoutingStatusState }
+    ).__anglesRoutingStatus;
+    if (existing && (existing.status === 'Pending' || existing.status === 'Verified' || existing.status === 'Sync Error')) {
+      return existing;
+    }
+    return {
+      status: 'Pending',
+      detail: 'Checking chapter HTML files & question routes on disk...',
+      source: 'disk-sync',
+      updatedAt: new Date().toISOString(),
+    };
+  });
+
+  const fetchDiskRegistryFiles = useCallback(async (manualVerify = false) => {
+    setDiskSyncStatus('loading');
+    if (manualVerify) {
+      setRoutingState((prev) => ({
+        ...prev,
+        status: 'Pending',
+        detail: 'Verifying chapter HTML files & question routes on disk...',
+        source: 'disk-sync',
+        updatedAt: new Date().toISOString(),
+      }));
+    }
+    try {
+      const response = await fetch('/api/registry/files', { cache: 'no-store' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const payload = (await response.json()) as { folders?: DiskChapterFolder[] };
+      const folders = Array.isArray(payload.folders) ? payload.folders : [];
+      setDiskFolders(folders);
+      setDiskSyncStatus('synced');
+      const totalFiles = folders.reduce((sum, f) => sum + (f.files?.length || 0), 0);
+      setRoutingState((prev) => {
+        if (!manualVerify && prev.source === 'question-index') {
+          return prev;
+        }
+        return {
+          status: 'Verified',
+          detail: `Disk question bank verified (${folders.length} chapter folder${folders.length === 1 ? '' : 's'}, ${totalFiles} file${totalFiles === 1 ? '' : 's'} synced).`,
+          targetPath: prev.targetPath,
+          addedIds: manualVerify ? [] : prev.addedIds,
+          source: 'disk-sync',
+          updatedAt: new Date().toISOString(),
+        };
+      });
+    } catch (err) {
+      setDiskSyncStatus('offline');
+      setRoutingState((prev) => ({
+        ...prev,
+        status: 'Sync Error',
+        detail:
+          err instanceof Error
+            ? `Disk sync failed (${err.message}) — check local server connection.`
+            : 'Disk sync failed — unable to reach /api/registry/files.',
+        source: 'disk-sync',
+        updatedAt: new Date().toISOString(),
+      }));
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchDiskRegistryFiles();
+  }, [fetchDiskRegistryFiles]);
+
+  // Listen to live Question Routing Status broadcasts from 07 Question Index & Study Mode disk saves
+  useEffect(() => {
+    const onRoutingStatus = (event: Event) => {
+      const detail = (event as CustomEvent<QuestionRoutingStatusState>)?.detail;
+      if (!detail || !detail.status) return;
+      setRoutingState({
+        status: detail.status,
+        detail: detail.detail || '',
+        targetPath: detail.targetPath,
+        addedIds: detail.addedIds,
+        questionCount: detail.questionCount,
+        source: detail.source,
+        updatedAt: detail.updatedAt || new Date().toISOString(),
+      });
+    };
+    window.addEventListener('angles:routing-status', onRoutingStatus);
+    return () => window.removeEventListener('angles:routing-status', onRoutingStatus);
+  }, []);
+
+  // Re-absorb live whenever the user saves/edits study materials in 02 Coding Area, ships a PYQ batch, or restores a backup
+  useEffect(() => {
+    const onStorageUpdated = (event: Event) => {
+      const detail = (event as CustomEvent)?.detail;
+      if (detail?.source === 'tracker') return;
+      setDraftRevision((n) => n + 1);
+      void fetchDiskRegistryFiles(false);
+    };
+    window.addEventListener('angles:storage-updated', onStorageUpdated);
+    return () => window.removeEventListener('angles:storage-updated', onStorageUpdated);
+  }, [fetchDiskRegistryFiles]);
+
+  useEffect(() => {
+    if (activeSectionView === 'registry') {
+      void fetchDiskRegistryFiles(false);
+    }
+  }, [activeSectionView, fetchDiskRegistryFiles]);
+
+  const absorbedRegistry = useMemo(
+    () => {
+      void draftRevision;
+      return absorbLiveRegistryFromFiles(
+        domains,
+        chapters,
+        diskFolders,
+        CHAPTER_MKML_STORAGE,
+        stepIdOverrides
+      );
+    },
+    [domains, chapters, diskFolders, stepIdOverrides, draftRevision]
+  );
+
+  const {
+    subtopics,
+    concepts,
+    microConcepts,
+    invalidIds: invalidRegistryIds,
+    orphanedOverrides: orphanedStepOverrides,
+    liveMkmlByChapter,
+    unregisteredDiskFolders,
+    scannedFileCount,
+    linkedFolderByChapterCode,
+  } = absorbedRegistry;
+
+  // Cascading cleanup when a code file is deleted in 02 Coding Area:
+  // purge removed question IDs & orphaned attempt history from ledgers, stepsByQid, and testSessions
+  useEffect(() => {
+    const onFileDeleted = (event: Event) => {
+      const detail = (
+        event as CustomEvent<{
+          folder?: string;
+          file?: string;
+          removedQuestionIds?: string[];
+          removedConceptIds?: string[];
+          ledgerRemoved?: boolean;
+        }>
+      )?.detail;
+      if (!detail || !detail.folder) return;
+
+      const removedIdSet = new Set(
+        (Array.isArray(detail.removedQuestionIds) ? detail.removedQuestionIds : []).map((id) =>
+          String(id).toUpperCase()
+        )
+      );
+      const folderLower = String(detail.folder).trim().toLowerCase();
+
+      // Match chapter code(s) linked to this disk folder
+      const matchedChapterCodes = new Set<string>();
+      for (const [chCode, linkedFolder] of Object.entries(linkedFolderByChapterCode)) {
+        if (String(linkedFolder).trim().toLowerCase() === folderLower) {
+          matchedChapterCodes.add(chCode.toUpperCase());
+        }
+      }
+      for (const ch of chapters) {
+        if (
+          (ch.folderName && ch.folderName.trim().toLowerCase() === folderLower) ||
+          ch.name.trim().toLowerCase() === folderLower
+        ) {
+          matchedChapterCodes.add(ch.code.toUpperCase());
+        }
+      }
+
+      if (removedIdSet.size > 0 || detail.ledgerRemoved) {
+        setLedgers((prev) => {
+          let changed = false;
+          const next: Record<string, ChapterLedger> = {};
+          for (const [chCode, ledger] of Object.entries(prev)) {
+            const isTargetChapter = matchedChapterCodes.has(chCode.toUpperCase());
+            if (isTargetChapter && detail.ledgerRemoved) {
+              if (Object.keys(ledger.concepts || {}).length > 0) {
+                next[chCode] = { ...ledger, concepts: {} };
+                changed = true;
+              } else {
+                next[chCode] = ledger;
+              }
+              continue;
+            }
+            if (removedIdSet.size === 0) {
+              next[chCode] = ledger;
+              continue;
+            }
+            let ledgerChanged = false;
+            const nextConcepts: Record<string, Record<string, AttemptTuple[]>> = {};
+            for (const [cMid, qMap] of Object.entries(ledger.concepts || {})) {
+              const filteredQMap: Record<string, AttemptTuple[]> = {};
+              for (const [qid, attempts] of Object.entries(qMap || {})) {
+                if (removedIdSet.has(qid.toUpperCase())) {
+                  ledgerChanged = true;
+                } else {
+                  filteredQMap[qid] = attempts;
+                }
+              }
+              if (Object.keys(filteredQMap).length > 0) {
+                nextConcepts[cMid] = filteredQMap;
+              } else if (Object.keys(qMap || {}).length > 0) {
+                ledgerChanged = true;
+              }
+            }
+            if (ledgerChanged) {
+              next[chCode] = { ...ledger, concepts: nextConcepts };
+              changed = true;
+            } else {
+              next[chCode] = ledger;
+            }
+          }
+          return changed ? next : prev;
+        });
+      }
+
+      if (removedIdSet.size > 0) {
+        setStepsByQid((prev) => {
+          let changed = false;
+          const next: Record<string, ExplanationStepItem[]> = {};
+          for (const [qid, steps] of Object.entries(prev)) {
+            if (removedIdSet.has(qid.toUpperCase())) {
+              changed = true;
+            } else {
+              next[qid] = steps;
+            }
+          }
+          return changed ? next : prev;
+        });
+
+        setTestSessions((prev) => {
+          let changed = false;
+          const next: TestSessionRecord[] = [];
+          for (const session of prev) {
+            const filteredIds = session.questionUniqueIds.filter(
+              (qid) => !removedIdSet.has(qid.toUpperCase())
+            );
+            if (filteredIds.length !== session.questionUniqueIds.length) {
+              changed = true;
+            }
+            if (filteredIds.length > 0) {
+              next.push(
+                filteredIds.length === session.questionUniqueIds.length
+                  ? session
+                  : { ...session, questionUniqueIds: filteredIds }
+              );
+            } else {
+              changed = true;
+            }
+          }
+          return changed ? next : prev;
+        });
+      }
+
+      setRoutingState({
+        status: 'Verified',
+        detail: `Deleted ${detail.folder}/${detail.file || 'file'} — purged ${removedIdSet.size} question(s) & marks history.`,
+        targetPath: `${detail.folder}/${detail.file || ''}`,
+        addedIds: [],
+        source: 'disk-sync',
+        updatedAt: new Date().toISOString(),
+      });
+      setDraftRevision((n) => n + 1);
+      void fetchDiskRegistryFiles(false);
+    };
+
+    window.addEventListener('angles:file-deleted', onFileDeleted);
+    return () => window.removeEventListener('angles:file-deleted', onFileDeleted);
+  }, [chapters, linkedFolderByChapterCode, fetchDiskRegistryFiles]);
+
+  // Additive sync: ensure newly shipped disk questions (e.g. QA-TRG-BS-FR-24) appear in chapter ledger pool
+  useEffect(() => {
+    if (diskSyncStatus !== 'synced') return;
+    const entries = Object.entries(liveMkmlByChapter);
+    if (entries.length === 0) return;
+
+    setLedgers((prev) => {
+      let changed = false;
+      const next: Record<string, ChapterLedger> = { ...prev };
+      for (const [chapterCode, rawMkml] of entries) {
+        if (!rawMkml || !next[chapterCode]) continue;
+        const ledger = next[chapterCode];
+        const tree = scanChapterStorageAndMarks(
+          chapterCode,
+          ledger,
+          domains,
+          chapters,
+          subtopics,
+          concepts,
+          microConcepts,
+          rawMkml
+        );
+        if (tree.allQuestions.length === 0) continue;
+
+        let chapterMutated = false;
+        const nextConcepts: Record<string, Record<string, AttemptTuple[]>> = {};
+        for (const [cKey, qMap] of Object.entries(ledger.concepts)) {
+          nextConcepts[cKey] = { ...qMap };
+        }
+
+        for (const q of tree.allQuestions) {
+          const existsAnywhere = Object.values(nextConcepts).some((qMap) =>
+            Object.prototype.hasOwnProperty.call(qMap, q.uniqueId)
+          );
+          if (!existsAnywhere) {
+            const conceptKey =
+              q.subtopicShortCode && q.conceptShortCode
+                ? `${q.subtopicShortCode}-${q.conceptShortCode}`
+                : q.conceptShortCode || 'C1';
+            if (!nextConcepts[conceptKey]) nextConcepts[conceptKey] = {};
+            nextConcepts[conceptKey][q.uniqueId] = [];
+            chapterMutated = true;
+          }
+        }
+
+        if (chapterMutated) {
+          next[chapterCode] = { ...ledger, concepts: nextConcepts };
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [diskSyncStatus, liveMkmlByChapter, domains, chapters, subtopics, concepts, microConcepts]);
+
   // Shared Question Step-IDs (T1, T2, T3) mapped by Unique Question ID
   const [stepsByQid, setStepsByQid] = useState<Record<string, ExplanationStepItem[]>>(
     initialHydrated.stepsByQid
@@ -459,32 +641,190 @@ export const TrackerPageOne: React.FC = () => {
   const [exams, setExams] = useState<ExamProfile[]>(initialHydrated.exams);
   const [selectedExamId, setSelectedExamId] = useState<string>(initialHydrated.selectedExamId);
 
-  const currentLedger = ledgers[activeChapterKey] || ledgers.TD;
+  const testingChapterCodes = useMemo(() => {
+    const testingDomSet = new Set(
+      domains.filter((d) => isTestingDomain(d)).map((d) => d.code.toUpperCase())
+    );
+    return new Set(
+      chapters
+        .filter((c) => testingDomSet.has(c.domainCode.toUpperCase()))
+        .map((c) => c.code.toUpperCase())
+    );
+  }, [domains, chapters]);
 
-  // Auto-persist every Tracker, Exam Info, and Registry change to browser localStorage
+  const visibleLedgers = useMemo(() => {
+    const registeredActiveCodes = new Set(
+      chapters
+        .filter((c) => !testingChapterCodes.has(c.code.toUpperCase()))
+        .map((c) => c.code.toUpperCase())
+    );
+    const filtered: Record<string, ChapterLedger> = {};
+    for (const [code, ledger] of Object.entries(ledgers)) {
+      const upper = code.toUpperCase();
+      if (!testingChapterCodes.has(upper) && (registeredActiveCodes.size === 0 || registeredActiveCodes.has(upper))) {
+        filtered[code] = ledger;
+      }
+    }
+    return filtered;
+  }, [ledgers, chapters, testingChapterCodes]);
+
+  const emptyFallbackLedger = useMemo(
+    () => createEmptyChapterLedger('NONE', 'No Active Chapters'),
+    []
+  );
+
+  const currentLedger =
+    visibleLedgers[activeChapterKey] ||
+    Object.values(visibleLedgers)[0] ||
+    emptyFallbackLedger;
+
+  // Keep activeChapterKey valid whenever chapters are deleted or moved into Dummy/Sandbox domain
   useEffect(() => {
-    savePersistedTrackerState({
+    const availableKeys = Object.keys(visibleLedgers);
+    if (availableKeys.length === 0) return;
+    if (!visibleLedgers[activeChapterKey]) {
+      const nextKey = availableKeys[0];
+      setActiveChapterKey(nextKey);
+      const nextLedger = visibleLedgers[nextKey];
+      if (nextLedger) {
+        setFastInput(String(nextLedger.timing.fastLimit));
+        setMedInput(String(nextLedger.timing.mediumLimit));
+        setSlowInput(String(nextLedger.timing.slowLimit));
+      }
+    }
+  }, [visibleLedgers, activeChapterKey]);
+
+  // Hydrate from disk (data/studio-state.json) on mount before enabling auto-save so disk is never clobbered
+  const [diskHydrated, setDiskHydrated] = useState<boolean>(false);
+  const pendingDiskFlushRef = React.useRef<{
+    snapshot: Omit<typeof initialHydrated, 'restoredFromLocal' | 'savedAt'>;
+    savedAt: string | null;
+  } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all([
+      loadDiskTrackerState(defaultBundle),
+      fetch('/api/marks', { cache: 'no-store' })
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null) as Promise<{
+        ok?: boolean;
+        ledgers?: {
+          folder: string;
+          file: string;
+          chapterCode: string;
+          ledger: {
+            chapterCode?: string;
+            chapterMid?: string;
+            topic?: string;
+            lastUpdated?: string | null;
+            timingConfig?: Partial<ChapterTimingConfig>;
+            concepts?: Record<string, Record<string, AttemptTuple[]>>;
+          };
+        }[];
+      } | null>,
+    ]).then(([diskState, marksPayload]) => {
+      if (cancelled) return;
+      let baseLedgers = initialHydrated.ledgers;
+      if (diskState) {
+        const localTs = initialHydrated.savedAt ? Date.parse(initialHydrated.savedAt) : 0;
+        const diskTs = diskState.savedAt ? Date.parse(diskState.savedAt) : 0;
+        if (!initialHydrated.restoredFromLocal || diskTs >= localTs) {
+          baseLedgers = diskState.ledgers;
+          setActiveChapterKey(diskState.activeChapterKey);
+          setDomains(diskState.domains);
+          setChapters(diskState.chapters);
+          setStepIdOverrides(diskState.stepIdOverrides);
+          setStepsByQid(diskState.stepsByQid);
+          setTestSessions(diskState.testSessions);
+          setActiveTestSessionId(diskState.activeTestSessionId);
+          setExams(diskState.exams);
+          setSelectedExamId(diskState.selectedExamId);
+        }
+      }
+
+      // Overlay dedicated per-chapter tracker-ledger.json files from disk (authoritative marks store)
+      const diskMarkEntries = Array.isArray(marksPayload?.ledgers) ? marksPayload.ledgers : [];
+      if (diskMarkEntries.length > 0) {
+        const mergedWithMarks: Record<string, ChapterLedger> = { ...baseLedgers };
+        for (const entry of diskMarkEntries) {
+          const code = (entry.chapterCode || entry.ledger?.chapterCode || entry.ledger?.chapterMid || '').toUpperCase();
+          if (!code || !entry.ledger?.concepts) continue;
+          const existing = mergedWithMarks[code] || createEmptyChapterLedger(code, entry.ledger.topic || entry.folder);
+          const tc = entry.ledger.timingConfig;
+          mergedWithMarks[code] = {
+            ...existing,
+            chapterCode: code,
+            chapterName: entry.ledger.topic || existing.chapterName,
+            timing:
+              tc && tc.fastLimit && tc.mediumLimit && tc.slowLimit
+                ? {
+                    fastLimit: Number(tc.fastLimit),
+                    mediumLimit: Number(tc.mediumLimit),
+                    slowLimit: Number(tc.slowLimit),
+                    locked: Boolean(tc.locked),
+                  }
+                : existing.timing,
+            concepts: entry.ledger.concepts,
+          };
+        }
+        setLedgers(mergedWithMarks);
+      } else if (baseLedgers !== initialHydrated.ledgers) {
+        setLedgers(baseLedgers);
+      }
+
+      setDiskHydrated(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [defaultBundle, initialHydrated.ledgers, initialHydrated.restoredFromLocal, initialHydrated.savedAt]);
+
+  // Flush any pending disk write on tab close / refresh using keepalive
+  useEffect(() => {
+    const flushPendingToDisk = () => {
+      const pending = pendingDiskFlushRef.current;
+      if (!pending) return;
+      pendingDiskFlushRef.current = null;
+      void saveDiskTrackerState(pending.snapshot, pending.savedAt, true);
+    };
+    window.addEventListener('pagehide', flushPendingToDisk);
+    window.addEventListener('beforeunload', flushPendingToDisk);
+    return () => {
+      window.removeEventListener('pagehide', flushPendingToDisk);
+      window.removeEventListener('beforeunload', flushPendingToDisk);
+    };
+  }, []);
+
+  // Auto-persist permanent Tracker, Exam Info (weightages), Domains, Chapters, and Step Overrides to LocalStorage + Disk JSON
+  useEffect(() => {
+    if (!diskHydrated) return;
+    const snapshot = {
       activeChapterKey,
       ledgers,
       domains,
       chapters,
-      subtopics,
-      concepts,
-      microConcepts,
+      stepIdOverrides,
       stepsByQid,
       testSessions,
       activeTestSessionId,
       exams,
       selectedExamId,
-    });
+    };
+    const savedAt = savePersistedTrackerState(snapshot);
+    pendingDiskFlushRef.current = { snapshot, savedAt };
+    const timer = window.setTimeout(() => {
+      pendingDiskFlushRef.current = null;
+      void saveDiskTrackerState(snapshot, savedAt, false);
+    }, 120);
+    return () => window.clearTimeout(timer);
   }, [
+    diskHydrated,
     activeChapterKey,
     ledgers,
     domains,
     chapters,
-    subtopics,
-    concepts,
-    microConcepts,
+    stepIdOverrides,
     stepsByQid,
     testSessions,
     activeTestSessionId,
@@ -499,20 +839,22 @@ export const TrackerPageOne: React.FC = () => {
       setActiveChapterKey(next.activeChapterKey);
       setDomains(next.domains);
       setChapters(next.chapters);
-      setSubtopics(next.subtopics);
-      setConcepts(next.concepts);
-      setMicroConcepts(next.microConcepts);
+      setStepIdOverrides(next.stepIdOverrides);
       setStepsByQid(next.stepsByQid);
       setTestSessions(next.testSessions);
       setActiveTestSessionId(next.activeTestSessionId);
       setExams(next.exams);
       setSelectedExamId(next.selectedExamId);
-      const nextLedger = next.ledgers[next.activeChapterKey] || next.ledgers.TD;
+      const nextLedger =
+        next.ledgers[next.activeChapterKey] ||
+        next.ledgers.TRG ||
+        Object.values(next.ledgers)[0];
       if (nextLedger) {
         setFastInput(String(nextLedger.timing.fastLimit));
         setMedInput(String(nextLedger.timing.mediumLimit));
         setSlowInput(String(nextLedger.timing.slowLimit));
       }
+      void fetchDiskRegistryFiles();
     };
     const onReloadStorage = () => {
       applyState(loadPersistedTrackerState(defaultBundle));
@@ -526,7 +868,7 @@ export const TrackerPageOne: React.FC = () => {
       window.removeEventListener('angles:tracker-reload-storage', onReloadStorage);
       window.removeEventListener('angles:tracker-reset-defaults', onResetDefaults);
     };
-  }, [defaultBundle]);
+  }, [defaultBundle, fetchDiskRegistryFiles]);
 
   // Local timing input state for editing when unlocked
   const [fastInput, setFastInput] = useState<string>(String(currentLedger.timing.fastLimit));
@@ -549,11 +891,11 @@ export const TrackerPageOne: React.FC = () => {
       const detail = (event as CustomEvent)?.detail || {};
       if (detail.chapterCode) {
         const code = String(detail.chapterCode).toUpperCase();
-        if (ledgers[code]) {
+        if (visibleLedgers[code]) {
           setActiveChapterKey(code);
-          setFastInput(String(ledgers[code].timing.fastLimit));
-          setMedInput(String(ledgers[code].timing.mediumLimit));
-          setSlowInput(String(ledgers[code].timing.slowLimit));
+          setFastInput(String(visibleLedgers[code].timing.fastLimit));
+          setMedInput(String(visibleLedgers[code].timing.mediumLimit));
+          setSlowInput(String(visibleLedgers[code].timing.slowLimit));
         }
       }
       if (detail.action === 'set-view' && detail.view) {
@@ -563,20 +905,22 @@ export const TrackerPageOne: React.FC = () => {
       if (detail.action === 'launch-scoped-cards') {
         const rawCode = String(detail.rootMid || detail.chapterCode || '').trim().toUpperCase();
         const folderUpper = String(detail.folder || '').toUpperCase();
-        const inferredFromFolder = folderUpper.includes('PRONOUN')
-          ? 'PN'
-          : folderUpper.includes('TIME')
-            ? 'TD'
-            : folderUpper.includes('TRIG')
-              ? 'TRG'
-              : '';
-        const candidateCode = rawCode || inferredFromFolder || 'TRG';
-        const targetCode = ledgers[candidateCode]
-          ? candidateCode
-          : candidateCode.includes('PRONOUN')
+        const inferredFromFolder = folderUpper.includes('TRIG')
+          ? 'TRG'
+          : folderUpper.includes('PRONOUN NEW')
             ? 'PN'
-            : 'TRG';
-        const targetLedger = ledgers[targetCode] || ledgers.TRG;
+            : folderUpper.includes('PHRASES')
+              ? 'PC'
+              : folderUpper.includes('TENSES')
+                ? 'TE'
+                : folderUpper.includes('SUBJECT')
+                  ? 'SVA'
+                  : folderUpper.includes('VERB')
+                    ? 'VB'
+                    : '';
+        const candidateCode = rawCode || inferredFromFolder || 'TRG';
+        const targetCode = visibleLedgers[candidateCode] ? candidateCode : 'TRG';
+        const targetLedger = visibleLedgers[targetCode] || visibleLedgers.TRG || INITIAL_LEDGERS.TRG;
         setActiveChapterKey(targetCode);
         setFastInput(String(targetLedger.timing.fastLimit));
         setMedInput(String(targetLedger.timing.mediumLimit));
@@ -589,7 +933,8 @@ export const TrackerPageOne: React.FC = () => {
           chapters,
           subtopics,
           concepts,
-          microConcepts
+          microConcepts,
+          liveMkmlByChapter[targetCode]
         );
         const requestedConcept = String(detail.conceptMid || '').trim().toUpperCase();
         let matchedQuestions = tree.allQuestions;
@@ -624,7 +969,7 @@ export const TrackerPageOne: React.FC = () => {
 
     window.addEventListener('angles:tracker-command', onTrackerCommand);
     return () => window.removeEventListener('angles:tracker-command', onTrackerCommand);
-  }, [ledgers, domains, chapters, subtopics, concepts, microConcepts]);
+  }, [visibleLedgers, domains, chapters, subtopics, concepts, microConcepts, liveMkmlByChapter]);
 
   useEffect(() => {
     const targetNavPage =
@@ -639,10 +984,12 @@ export const TrackerPageOne: React.FC = () => {
   }, [activeSectionView]);
 
   const handleJumpToChapterLedger = (chapterCode: string) => {
+    if (testingChapterCodes.has(chapterCode.toUpperCase())) return;
     if (!ledgers[chapterCode]) {
+      const chMeta = chapters.find((c) => c.code === chapterCode);
       setLedgers((prev) => ({
         ...prev,
-        [chapterCode]: createSeededChapterLedger(chapterCode, chapterCode, 0, 0, 10),
+        [chapterCode]: createEmptyChapterLedger(chapterCode, chMeta?.name || chapterCode),
       }));
     }
     setActiveChapterKey(chapterCode);
@@ -661,10 +1008,231 @@ export const TrackerPageOne: React.FC = () => {
       if (prev[chapterCode]) return prev;
       return {
         ...prev,
-        [chapterCode]: createSeededChapterLedger(chapterCode, chapterName, 0, 0, 10),
+        [chapterCode]: createEmptyChapterLedger(chapterCode, chapterName),
       };
     });
   };
+
+  // Permanently purge all Tracker state (ledger, steps, test sessions, overrides, drafts) when a chapter is deleted
+  const handleDeleteChapterData = useCallback(
+    (chapterCode: string, folderName?: string) => {
+      const codeUpper = chapterCode.toUpperCase();
+      const deletedQids = new Set<string>();
+      const existingLedger = ledgers[chapterCode];
+      if (existingLedger?.concepts) {
+        for (const qMap of Object.values(existingLedger.concepts)) {
+          for (const qid of Object.keys(qMap || {})) {
+            deletedQids.add(qid.toUpperCase());
+          }
+        }
+      }
+
+      setLedgers((prev) => {
+        const next: Record<string, ChapterLedger> = {};
+        for (const [k, v] of Object.entries(prev)) {
+          if (k.toUpperCase() !== codeUpper) {
+            next[k] = v;
+          }
+        }
+        return next;
+      });
+
+      const chapterSegmentRe = new RegExp(`-${codeUpper.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-`, 'i');
+
+      setStepsByQid((prev) => {
+        let changed = false;
+        const next: Record<string, ExplanationStepItem[]> = {};
+        for (const [qid, steps] of Object.entries(prev)) {
+          if (deletedQids.has(qid.toUpperCase()) || chapterSegmentRe.test(qid)) {
+            changed = true;
+          } else {
+            next[qid] = steps;
+          }
+        }
+        return changed ? next : prev;
+      });
+
+      setStepIdOverrides((prev) => {
+        let changed = false;
+        const next: Record<string, string> = {};
+        for (const [baseId, stepCode] of Object.entries(prev)) {
+          if (chapterSegmentRe.test(baseId)) {
+            changed = true;
+          } else {
+            next[baseId] = stepCode;
+          }
+        }
+        return changed ? next : prev;
+      });
+
+      setTestSessions((prev) =>
+        prev.filter((session) => session.chapterCode.toUpperCase() !== codeUpper)
+      );
+
+      // Clear any browser drafts stored for the deleted chapter folder
+      if (folderName) {
+        try {
+          const prefix = `angles-studio-draft:${folderName}/`;
+          const keysToRemove: string[] = [];
+          for (let i = 0; i < window.localStorage.length; i++) {
+            const k = window.localStorage.key(i);
+            if (k && k.startsWith(prefix)) keysToRemove.push(k);
+          }
+          keysToRemove.forEach((k) => window.localStorage.removeItem(k));
+        } catch {
+          // ignore localStorage errors
+        }
+      }
+
+      setRoutingState({
+        status: 'Verified',
+        detail: `Deleted chapter [${chapterCode}]${folderName ? ` and disk folder /${folderName}/` : ''} — purged ledger, steps & sessions.`,
+        targetPath: folderName || chapterCode,
+        addedIds: [],
+        source: 'disk-sync',
+        updatedAt: new Date().toISOString(),
+      });
+    },
+    [ledgers]
+  );
+
+  // Move chapter between domains (including Dummy/Sandbox <-> Active):
+  // rewrites OLD-CH prefix on disk (HTML files + tracker-ledger.json) and in React state so attempt history survives intact
+  const handleMoveChapterDomain = useCallback(
+    async (
+      chapterCode: string,
+      oldDomainCode: string,
+      newDomainCode: string,
+      folderName?: string
+    ) => {
+      if (!oldDomainCode || !newDomainCode || oldDomainCode.toUpperCase() === newDomainCode.toUpperCase()) {
+        return;
+      }
+
+      const escapedOld = oldDomainCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const escapedCh = chapterCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const prefixRe = new RegExp(`^${escapedOld}-${escapedCh}(?=-|$)`, 'i');
+      const rewriteKey = (key: string) =>
+        prefixRe.test(key) ? key.replace(prefixRe, `${newDomainCode}-${chapterCode}`) : key;
+
+      const resolvedFolder = folderName || linkedFolderByChapterCode[chapterCode];
+      if (resolvedFolder) {
+        try {
+          await fetch(`/api/chapters/${encodeURIComponent(resolvedFolder)}/rewrite-domain-prefix`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              oldDomainCode,
+              newDomainCode,
+              chapterCode,
+            }),
+          });
+        } catch {
+          // Non-fatal if folder does not exist on disk yet
+        }
+      }
+
+      const chapterMeta = chapters.find(
+        (c) => c.code.toUpperCase() === chapterCode.toUpperCase()
+      );
+      const targetIsTesting = domains.some(
+        (d) => d.code.toUpperCase() === newDomainCode.toUpperCase() && isTestingDomain(d)
+      );
+
+      setLedgers((prev) => {
+        const existing = prev[chapterCode];
+        if (!existing) {
+          if (targetIsTesting) return prev;
+          return {
+            ...prev,
+            [chapterCode]: createEmptyChapterLedger(
+              chapterCode,
+              chapterMeta?.name || chapterCode
+            ),
+          };
+        }
+        const rewrittenConcepts: Record<string, Record<string, AttemptTuple[]>> = {};
+        for (const [cMid, qMap] of Object.entries(existing.concepts || {})) {
+          rewrittenConcepts[cMid] = {};
+          for (const [qid, attempts] of Object.entries(qMap || {})) {
+            rewrittenConcepts[cMid][rewriteKey(qid)] = attempts;
+          }
+        }
+        return {
+          ...prev,
+          [chapterCode]: { ...existing, concepts: rewrittenConcepts },
+        };
+      });
+
+      setStepsByQid((prev) => {
+        let changed = false;
+        const next: Record<string, ExplanationStepItem[]> = {};
+        for (const [qid, steps] of Object.entries(prev)) {
+          const rewritten = rewriteKey(qid);
+          if (rewritten !== qid) changed = true;
+          next[rewritten] = steps;
+        }
+        return changed ? next : prev;
+      });
+
+      setStepIdOverrides((prev) => {
+        let changed = false;
+        const next: Record<string, string> = {};
+        for (const [baseId, stepCode] of Object.entries(prev)) {
+          const rewritten = rewriteKey(baseId);
+          if (rewritten !== baseId) changed = true;
+          next[rewritten] = stepCode;
+        }
+        return changed ? next : prev;
+      });
+
+      setTestSessions((prev) =>
+        prev.map((session) =>
+          session.chapterCode.toUpperCase() === chapterCode.toUpperCase()
+            ? {
+                ...session,
+                questionUniqueIds: session.questionUniqueIds.map((qid) => rewriteKey(qid)),
+              }
+            : session
+        )
+      );
+
+      setDraftRevision((n) => n + 1);
+      await fetchDiskRegistryFiles(false);
+      const refreshQI = (window as unknown as { refreshQuestionIndex?: () => void })
+        .refreshQuestionIndex;
+      if (typeof refreshQI === 'function') refreshQI();
+    },
+    [chapters, domains, linkedFolderByChapterCode, fetchDiskRegistryFiles]
+  );
+
+  const resolveChapterDiskFolder = useCallback(
+    (chapterCode: string, fallbackName?: string): string => {
+      const upper = chapterCode.toUpperCase();
+      const linked = linkedFolderByChapterCode[upper] || linkedFolderByChapterCode[chapterCode];
+      if (linked) return linked;
+      const chMeta = chapters.find((c) => c.code.toUpperCase() === upper);
+      if (chMeta?.folderName) return chMeta.folderName;
+      return fallbackName || chMeta?.name || chapterCode;
+    },
+    [linkedFolderByChapterCode, chapters]
+  );
+
+  const syncLedgerToMarksFile = useCallback(
+    async (ledgerToSync: ChapterLedger) => {
+      const folder = resolveChapterDiskFolder(ledgerToSync.chapterCode, ledgerToSync.chapterName);
+      try {
+        await fetch(`/api/marks/${encodeURIComponent(folder)}/sync`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ledger: ledgerToSync }),
+        });
+      } catch {
+        // fallback already persisted in studio-state.json & localStorage
+      }
+    },
+    [resolveChapterDiskFolder]
+  );
 
   const handleSaveTiming = () => {
     const f = parseInt(fastInput, 10);
@@ -681,31 +1249,38 @@ export const TrackerPageOne: React.FC = () => {
       return;
     }
     setTimingError(null);
+    const current = ledgers[activeChapterKey];
+    if (!current) return;
+    const updatedLedger: ChapterLedger = {
+      ...current,
+      timing: {
+        fastLimit: f,
+        mediumLimit: m,
+        slowLimit: s,
+        locked: true,
+      },
+    };
     setLedgers((prev) => ({
       ...prev,
-      [activeChapterKey]: {
-        ...prev[activeChapterKey],
-        timing: {
-          fastLimit: f,
-          mediumLimit: m,
-          slowLimit: s,
-          locked: true,
-        },
-      },
+      [activeChapterKey]: updatedLedger,
     }));
+    void syncLedgerToMarksFile(updatedLedger);
   };
 
   const handleUnlockTiming = () => {
-    setLedgers((prev) => ({
-      ...prev,
-      [activeChapterKey]: {
-        ...prev[activeChapterKey],
-        timing: {
-          ...prev[activeChapterKey].timing,
-          locked: false,
+    setLedgers((prev) => {
+      if (!prev[activeChapterKey]) return prev;
+      return {
+        ...prev,
+        [activeChapterKey]: {
+          ...prev[activeChapterKey],
+          timing: {
+            ...prev[activeChapterKey].timing,
+            locked: false,
+          },
         },
-      },
-    }));
+      };
+    });
   };
 
   // Flatten all unique questions in the chapter and inspect their LATEST attempt (An)
@@ -824,6 +1399,7 @@ export const TrackerPageOne: React.FC = () => {
   const handleSimulateAttempt = (status: AttemptStatus, seconds: number, option = 'A') => {
     setLedgers((prev) => {
       const target = prev[activeChapterKey];
+      if (!target) return prev;
       const nextConcepts: Record<string, Record<string, AttemptTuple[]>> = {};
 
       // Deep clone
@@ -870,29 +1446,31 @@ export const TrackerPageOne: React.FC = () => {
   };
 
   const handleResetSkeleton = () => {
-    setLedgers((prev) => {
-      const target = prev[activeChapterKey];
-      const cleanConcepts: Record<string, Record<string, AttemptTuple[]>> = {};
-      Object.entries(target.concepts).forEach(([cMid, qMap]) => {
-        cleanConcepts[cMid] = {};
-        Object.keys(qMap).forEach((qid) => {
-          cleanConcepts[cMid][qid] = [];
-        });
+    const target = ledgers[activeChapterKey];
+    if (!target) return;
+    const cleanConcepts: Record<string, Record<string, AttemptTuple[]>> = {};
+    Object.entries(target.concepts).forEach(([cMid, qMap]) => {
+      cleanConcepts[cMid] = {};
+      Object.keys(qMap).forEach((qid) => {
+        cleanConcepts[cMid][qid] = [];
       });
-      return {
-        ...prev,
-        [activeChapterKey]: {
-          ...target,
-          concepts: cleanConcepts,
-        },
-      };
     });
+    const resetLedger: ChapterLedger = {
+      ...target,
+      concepts: cleanConcepts,
+    };
+    setLedgers((prev) => ({
+      ...prev,
+      [activeChapterKey]: resetLedger,
+    }));
+    void syncLedgerToMarksFile(resetLedger);
   };
 
   // Simulate ingesting a new batch of questions into the chapter folder (grows TQ and MM = TQ * 3)
   const handleIngestBatch = (count: number) => {
     setLedgers((prev) => {
       const target = prev[activeChapterKey];
+      if (!target) return prev;
       const nextConcepts: Record<string, Record<string, AttemptTuple[]>> = {};
       Object.entries(target.concepts).forEach(([cMid, qMap]) => {
         nextConcepts[cMid] = { ...qMap };
@@ -936,6 +1514,7 @@ export const TrackerPageOne: React.FC = () => {
   ) => {
     setLedgers((prev) => {
       const target = prev[activeChapterKey];
+      if (!target) return prev;
       const nextConcepts: Record<string, Record<string, AttemptTuple[]>> = {};
 
       Object.entries(target.concepts).forEach(([cMid, qMap]) => {
@@ -991,8 +1570,8 @@ export const TrackerPageOne: React.FC = () => {
     });
   };
 
-  // Record evaluated test questions from Question Index (Full Test mode)
-  const handleRecordEvaluatedTest = (
+  // Record evaluated test questions from Question Index (3) Test Mode -> append A+1 to dedicated tracker-ledger.json
+  const handleRecordEvaluatedTest = async (
     evaluations: {
       uniqueId: string;
       conceptKey: string;
@@ -1000,55 +1579,57 @@ export const TrackerPageOne: React.FC = () => {
       seconds: number;
       option: string;
     }[]
-  ) => {
-    setLedgers((prev) => {
-      const target = prev[activeChapterKey];
-      const nextConcepts: Record<string, Record<string, AttemptTuple[]>> = {};
+  ): Promise<{ ok: boolean; file?: string; attemptSummary?: string; error?: string }> => {
+    const target = ledgers[activeChapterKey] || currentLedger;
+    const preSubmitConcepts = target.concepts;
+    const nextConcepts: Record<string, Record<string, AttemptTuple[]>> = {};
 
-      Object.entries(target.concepts).forEach(([cMid, qMap]) => {
-        nextConcepts[cMid] = {};
-        Object.entries(qMap).forEach(([qid, arr]) => {
-          nextConcepts[cMid][qid] = [...arr];
-        });
+    Object.entries(target.concepts).forEach(([cMid, qMap]) => {
+      nextConcepts[cMid] = {};
+      Object.entries(qMap).forEach(([qid, arr]) => {
+        nextConcepts[cMid][qid] = [...arr];
       });
+    });
 
-      evaluations.forEach((ev) => {
-        const { accMark, timeMark } = computeAttemptMarks(ev.status, ev.seconds, target.timing);
-        let found = false;
-        for (const [cMid, qMap] of Object.entries(nextConcepts)) {
-          if (qMap[ev.uniqueId]) {
-            nextConcepts[cMid][ev.uniqueId].push([
-              ev.status,
-              ev.seconds,
-              accMark,
-              timeMark,
-              ev.option,
-            ]);
-            found = true;
-            break;
-          }
-        }
-        if (!found) {
-          const cKey = ev.conceptKey || Object.keys(nextConcepts)[0] || 'C1';
-          if (!nextConcepts[cKey]) nextConcepts[cKey] = {};
-          if (!nextConcepts[cKey][ev.uniqueId]) nextConcepts[cKey][ev.uniqueId] = [];
-          nextConcepts[cKey][ev.uniqueId].push([
+    const appendedLabels: string[] = [];
+    evaluations.forEach((ev) => {
+      const { accMark, timeMark } = computeAttemptMarks(ev.status, ev.seconds, target.timing);
+      let found = false;
+      for (const [cMid, qMap] of Object.entries(nextConcepts)) {
+        if (qMap[ev.uniqueId]) {
+          nextConcepts[cMid][ev.uniqueId].push([
             ev.status,
             ev.seconds,
             accMark,
             timeMark,
             ev.option,
           ]);
+          appendedLabels.push(`A${nextConcepts[cMid][ev.uniqueId].length}`);
+          found = true;
+          break;
         }
-      });
-
-      return {
-        ...prev,
-        [activeChapterKey]: { ...target, concepts: nextConcepts },
-      };
+      }
+      if (!found) {
+        const cKey = ev.conceptKey || Object.keys(nextConcepts)[0] || 'C1';
+        if (!nextConcepts[cKey]) nextConcepts[cKey] = {};
+        if (!nextConcepts[cKey][ev.uniqueId]) nextConcepts[cKey][ev.uniqueId] = [];
+        nextConcepts[cKey][ev.uniqueId].push([
+          ev.status,
+          ev.seconds,
+          accMark,
+          timeMark,
+          ev.option,
+        ]);
+        appendedLabels.push(`A${nextConcepts[cKey][ev.uniqueId].length}`);
+      }
     });
 
-    // Also register this completed Full Test as a new test session in Test Analysis
+    setLedgers((prev) => ({
+      ...prev,
+      [activeChapterKey]: { ...target, concepts: nextConcepts },
+    }));
+
+    // Register this completed Test Mode session in Test Analysis
     const nextNum = testSessions.length + 1;
     const newSessionId = `test-${Date.now()}`;
     const now = new Date();
@@ -1062,17 +1643,96 @@ export const TrackerPageOne: React.FC = () => {
     };
     setTestSessions((prev) => [...prev, newSession]);
     setActiveTestSessionId(newSessionId);
+
+    // Write directly to dedicated per-chapter marks file: Angles-ultimate/data/<Folder>/tracker-ledger.json
+    const folder = resolveChapterDiskFolder(target.chapterCode, target.chapterName);
+    const uniqueLabels = [...new Set(appendedLabels)];
+    const attemptSummary =
+      uniqueLabels.length === 1
+        ? uniqueLabels[0]
+        : `${uniqueLabels[0] || 'A1'}–${uniqueLabels[uniqueLabels.length - 1] || 'A1'}`;
+
+    const emitMarksStatus = (
+      status: 'Pending' | 'Verified' | 'Sync Error',
+      detail: string,
+      targetPath?: string
+    ) => {
+      const payload = {
+        status,
+        detail,
+        targetPath: targetPath || `${folder}/tracker-ledger.json`,
+        addedIds: evaluations.slice(0, 4).map((e) => e.uniqueId),
+        questionCount: evaluations.length,
+        source: 'disk-sync' as const,
+        updatedAt: new Date().toISOString(),
+      };
+      (window as unknown as { __anglesRoutingStatus?: typeof payload }).__anglesRoutingStatus = payload;
+      window.dispatchEvent(new CustomEvent('angles:routing-status', { detail: payload }));
+    };
+
+    emitMarksStatus(
+      'Pending',
+      `Appending ${evaluations.length} Test Mode attempt(s) (${attemptSummary}) to ${folder}/tracker-ledger.json...`
+    );
+
+    try {
+      const response = await fetch(`/api/marks/${encodeURIComponent(folder)}/submit-test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chapterCode: target.chapterCode,
+          chapterName: target.chapterName,
+          timing: target.timing,
+          existingConcepts: preSubmitConcepts,
+          testSession: { id: newSessionId, label: newSession.label },
+          evaluations,
+        }),
+      });
+      const data = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        file?: string;
+        appendedAttempts?: { attempt: string }[];
+        error?: string;
+      };
+      if (!response.ok || !data.ok) {
+        const errMsg = data.error || `HTTP ${response.status} writing ${folder}/tracker-ledger.json`;
+        emitMarksStatus('Sync Error', errMsg);
+        return { ok: false, error: errMsg };
+      }
+      const savedFile = data.file || `${folder}/tracker-ledger.json`;
+      const serverLabels = [
+        ...new Set((data.appendedAttempts || []).map((a) => a.attempt).filter(Boolean)),
+      ];
+      const finalSummary =
+        serverLabels.length === 1
+          ? serverLabels[0]
+          : serverLabels.length > 1
+            ? `${serverLabels[0]}–${serverLabels[serverLabels.length - 1]}`
+            : attemptSummary;
+      emitMarksStatus(
+        'Verified',
+        `Appended ${evaluations.length} Test Mode attempt(s) (${finalSummary}) to ${savedFile}.`,
+        savedFile
+      );
+      const refreshTracker = (window as unknown as { refreshTracker?: (f?: string) => void }).refreshTracker;
+      if (typeof refreshTracker === 'function') refreshTracker(folder);
+      return { ok: true, file: savedFile, attemptSummary: finalSummary };
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : 'Failed to write tracker-ledger.json';
+      emitMarksStatus('Sync Error', errMsg);
+      return { ok: false, error: errMsg };
+    }
   };
 
   const { timing } = currentLedger;
 
   return (
-    <div className="w-full min-h-screen bg-[#F5F4EF] text-[#111827] px-2 py-2 space-y-2 font-sans select-none">
+    <div className="w-full max-w-full overflow-x-hidden min-h-screen bg-[#F5F4EF] text-[#111827] px-2 py-2 space-y-2 font-sans select-none">
       {/* SUB-PAGE OF CHAPTER TRACKER: PART 2 (SUBTOPIC BREAKDOWN) */}
       {activeSectionView === 'part-2' && (
         <TrackerPageTwo
           ledger={currentLedger}
-          allLedgers={ledgers}
+          allLedgers={visibleLedgers}
           onSelectChapter={handleSelectChapter}
           onSimulateAttemptInScope={handleSimulateAttemptInScope}
           onBackToPartOne={() => setActiveSectionView('part-1')}
@@ -1093,6 +1753,7 @@ export const TrackerPageOne: React.FC = () => {
           concepts={concepts}
           microConcepts={microConcepts}
           stepsByQid={stepsByQid}
+          liveChapterMkml={liveMkmlByChapter[currentLedger.chapterCode]}
         />
       )}
 
@@ -1100,7 +1761,7 @@ export const TrackerPageOne: React.FC = () => {
       {activeSectionView === 'question-index' && (
         <TrackerQuestionIndex
           ledger={currentLedger}
-          allLedgers={ledgers}
+          allLedgers={visibleLedgers}
           onSelectChapter={handleSelectChapter}
           onLaunchQuestionCards={(items, mod) => {
             setLaunchedCardItems(items);
@@ -1114,6 +1775,7 @@ export const TrackerPageOne: React.FC = () => {
           subtopics={subtopics}
           concepts={concepts}
           microConcepts={microConcepts}
+          liveChapterMkml={liveMkmlByChapter[currentLedger.chapterCode]}
         />
       )}
 
@@ -1153,6 +1815,7 @@ export const TrackerPageOne: React.FC = () => {
           concepts={concepts}
           microConcepts={microConcepts}
           stepsByQid={stepsByQid}
+          liveChapterMkml={liveMkmlByChapter[currentLedger.chapterCode]}
         />
       )}
 
@@ -1166,16 +1829,24 @@ export const TrackerPageOne: React.FC = () => {
           onSwitchMode={(m) => setActiveSectionView(m)}
           onJumpToChapterLedger={handleJumpToChapterLedger}
           onRegisterNewChapterLedger={handleRegisterNewChapterLedger}
+          onDeleteChapterData={handleDeleteChapterData}
+          onMoveChapterDomain={handleMoveChapterDomain}
           domains={domains}
           setDomains={setDomains}
           chapters={chapters}
           setChapters={setChapters}
           subtopics={subtopics}
-          setSubtopics={setSubtopics}
           concepts={concepts}
-          setConcepts={setConcepts}
           microConcepts={microConcepts}
-          setMicroConcepts={setMicroConcepts}
+          stepIdOverrides={stepIdOverrides}
+          setStepIdOverrides={setStepIdOverrides}
+          invalidRegistryIds={invalidRegistryIds}
+          orphanedStepOverrides={orphanedStepOverrides}
+          unregisteredDiskFolders={unregisteredDiskFolders}
+          linkedFolderByChapterCode={linkedFolderByChapterCode}
+          scannedFileCount={scannedFileCount}
+          diskSyncStatus={diskSyncStatus}
+          onRescanDiskFiles={() => void fetchDiskRegistryFiles(true)}
           exams={exams}
           setExams={setExams}
           selectedExamId={selectedExamId}
@@ -1186,6 +1857,15 @@ export const TrackerPageOne: React.FC = () => {
       {/* MAIN PAGE 1: CHAPTER TRACKER (PART 1: TOPIC OVERVIEW) */}
       {activeSectionView === 'part-1' && (
         <>
+          {/* QUESTION ROUTING STATUS FEEDBACK BAR (Pending / Verified / Sync Error) */}
+          <QuestionRoutingStatus
+            routingState={routingState}
+            scannedFileCount={scannedFileCount}
+            chapterCode={currentLedger.chapterCode}
+            onVerifySync={() => void fetchDiskRegistryFiles(true)}
+            isSyncing={diskSyncStatus === 'loading'}
+          />
+
           {/* CARD 1: TARGET SUBJECT CATEGORY + INLINE ONE-TIME TIMING CONFIG */}
           <div className="w-full bg-white border border-[#DFDDD4] rounded-lg px-4 py-3 flex flex-wrap items-center justify-between gap-3 shadow-2xs">
         {/* Left: Subject Category & Chapter Selector */}
@@ -1196,15 +1876,20 @@ export const TrackerPageOne: React.FC = () => {
             </div>
             <div className="flex items-center gap-2.5 mt-0.5">
               <select
-                value={activeChapterKey}
+                value={visibleLedgers[activeChapterKey] ? activeChapterKey : currentLedger.chapterCode}
                 onChange={(e) => handleSelectChapter(e.target.value)}
-                className="text-xl font-bold tracking-tight text-[#111827] bg-transparent border-b border-dashed border-[#9CA3AF] focus:outline-none focus:border-[#2563EB] cursor-pointer pr-1"
+                disabled={Object.keys(visibleLedgers).length === 0}
+                className="text-xl font-bold tracking-tight text-[#111827] bg-transparent border-b border-dashed border-[#9CA3AF] focus:outline-none focus:border-[#2563EB] cursor-pointer pr-1 disabled:opacity-60"
               >
-                {Object.values(ledgers).map((l) => (
-                  <option key={l.chapterCode} value={l.chapterCode}>
-                    {l.chapterName} [{l.chapterCode}]
-                  </option>
-                ))}
+                {Object.keys(visibleLedgers).length === 0 ? (
+                  <option value="NONE">No Active Chapters (Add or Move from Dummy)</option>
+                ) : (
+                  Object.values(visibleLedgers).map((l) => (
+                    <option key={l.chapterCode} value={l.chapterCode}>
+                      {l.chapterName} [{l.chapterCode}]
+                    </option>
+                  ))
+                )}
               </select>
               <span className="px-2 py-0.5 text-[10px] font-mono font-semibold uppercase tracking-wider bg-[#EFF6FF] text-[#1D4ED8] border border-[#BFDBFE] rounded">
                 MM = TQ × 3
