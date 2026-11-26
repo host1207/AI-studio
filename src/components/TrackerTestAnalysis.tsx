@@ -11,8 +11,11 @@ import type {
 import {
   scanChapterStorageAndMarks,
   computeMicroConceptDiagnostics,
+  pickWeakestMicroStep,
+  sortMicroConceptDiagnostics,
   getQuestionExplanationSteps,
   getStructuralQuestionIdFromSteps,
+  type MicroDiagnosticSortMode,
   type ExplanationStepItem,
 } from '../utils/mkmlStorageScanner';
 import type {
@@ -364,26 +367,28 @@ export const TrackerTestAnalysis: React.FC<Props> = ({
     };
   }, [displayedRows, ledger.timing]);
 
+  const [microSortMode, setMicroSortMode] = useState<MicroDiagnosticSortMode>('weakness');
+
   // Micro Concept / Step-ID (T1, T2, T3) Accuracy & Weakness Breakdown for displayed test questions
   const testMicroDiagnostics = useMemo(
     () =>
-      computeMicroConceptDiagnostics(
-        displayedRows.map((r) => r.question),
-        microConcepts,
-        scannedTree.chapterId,
-        stepsByQid,
-        speedMode === 'A1' ? 'first' : 'latest'
+      sortMicroConceptDiagnostics(
+        computeMicroConceptDiagnostics(
+          displayedRows.map((r) => r.question),
+          microConcepts,
+          scannedTree.chapterId,
+          stepsByQid,
+          speedMode === 'A1' ? 'first' : 'latest'
+        ),
+        microSortMode
       ),
-    [displayedRows, microConcepts, scannedTree.chapterId, stepsByQid, speedMode]
+    [displayedRows, microConcepts, scannedTree.chapterId, stepsByQid, speedMode, microSortMode]
   );
 
-  const weakestTestStep = useMemo(() => {
-    const attempted = testMicroDiagnostics.filter((r) => r.attemptedQuestionsCount > 0);
-    if (attempted.length === 0) return null;
-    return [...attempted].sort(
-      (a, b) => a.rawAccuracyPct - b.rawAccuracyPct || b.wrongCount - a.wrongCount
-    )[0];
-  }, [testMicroDiagnostics]);
+  const weakestTestStep = useMemo(
+    () => pickWeakestMicroStep(testMicroDiagnostics),
+    [testMicroDiagnostics]
+  );
 
   return (
     <div className="w-full bg-[#F5F4EF] text-[#111827] space-y-3 font-mono select-none">
@@ -722,31 +727,71 @@ export const TrackerTestAnalysis: React.FC<Props> = ({
               </span>
             </div>
             <div className="text-[11px] font-sans text-[#6B7280] mt-0.5">
-              Aggregates how many test questions involve each Step-ID (Micro Concept), the exact
-              Correct : Wrong ratio, and accuracy percentage up to the micro-ID level to pinpoint
-              your weakest solving step.
+              Ranks solving steps by percentage-checked <strong>Weakness Index</strong>{' '}
+              <code>Fail% × n/(n+1)</code> so 100%-failed low-frequency concepts outrank 50%
+              high-frequency concepts while flagging 1–2 question low-sample results.
             </div>
           </div>
 
-          {weakestTestStep && (
-            <div
-              className={`px-3 py-1.5 rounded-md border text-xs font-bold flex items-center gap-2 ${
-                weakestTestStep.rawAccuracyPct < 60 || weakestTestStep.wrongCount > 0
-                  ? 'bg-[#FEF2F2] border-[#FECACA] text-[#DC2626]'
-                  : 'bg-[#F0FDF4] border-[#BBF7D0] text-[#15803D]'
-              }`}
-            >
-              <span>
-                Weakest Step:{' '}
-                <strong className="underline">{weakestTestStep.stepCode}</strong> (
-                {weakestTestStep.stepName})
-              </span>
-              <span>·</span>
-              <span>{weakestTestStep.correctToWrongRatioLabel}</span>
-              <span>·</span>
-              <span>{weakestTestStep.rawAccuracyPct.toFixed(2)}% Accuracy</span>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex rounded border border-[#DFDDD4] bg-[#F9F8F4] p-0.5">
+              {(
+                [
+                  ['weakness', 'Weakness Index'],
+                  ['failure-pct', 'Fail %'],
+                  ['wrong-count', 'Wrong Count'],
+                  ['step-id', 'Step ID'],
+                ] as const
+              ).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setMicroSortMode(mode)}
+                  className={`px-2 py-1 rounded text-[10px] font-bold transition-colors cursor-pointer ${
+                    microSortMode === mode
+                      ? 'bg-[#1D4ED8] text-white'
+                      : 'text-[#4B5563] hover:text-[#111827]'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
-          )}
+
+            {weakestTestStep && (() => {
+              const isWeak =
+                weakestTestStep.diagnosticStatus === 'CRITICAL WEAK' ||
+                weakestTestStep.diagnosticStatus === 'WEAK STEP';
+              const isModerate = weakestTestStep.diagnosticStatus === 'MODERATE';
+              const pillColor = isWeak
+                ? 'bg-[#FEF2F2] border-[#FECACA] text-[#DC2626]'
+                : isModerate
+                  ? 'bg-[#FFFBEB] border-[#FDE68A] text-[#B45309]'
+                  : 'bg-[#F0FDF4] border-[#BBF7D0] text-[#15803D]';
+              return (
+                <div
+                  className={`px-3 py-1.5 rounded-md border text-xs font-bold flex flex-wrap items-center gap-2 ${pillColor}`}
+                >
+                  <span>
+                    {isWeak ? 'Weakest Step:' : isModerate ? 'Watch Step:' : 'All Steps Strong:'}{' '}
+                    <strong className="underline">{weakestTestStep.stepCode}</strong> (
+                    {weakestTestStep.stepName})
+                  </span>
+                  <span>·</span>
+                  <span>Index {weakestTestStep.weaknessIndex.toFixed(1)}</span>
+                  <span>·</span>
+                  <span>{weakestTestStep.correctToWrongRatioLabel}</span>
+                  <span>·</span>
+                  <span>Fail {weakestTestStep.failureRatePct.toFixed(1)}%</span>
+                  {weakestTestStep.sampleConfidence === 'LOW' && (
+                    <span className="px-1.5 py-0.5 rounded bg-white/80 border border-current/25 text-[10px]">
+                      Low Sample (n={weakestTestStep.attemptedQuestionsCount})
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
+          </div>
         </div>
 
         <div className="overflow-x-auto border border-[#DFDDD4] rounded-lg">
@@ -758,6 +803,7 @@ export const TrackerTestAnalysis: React.FC<Props> = ({
                 <th className="py-2.5 px-3">INVOLVED UNIQUE QUESTION IDs</th>
                 <th className="py-2.5 px-3 text-center">INVOLVED Qs</th>
                 <th className="py-2.5 px-3 text-center">CORRECT : WRONG RATIO</th>
+                <th className="py-2.5 px-3 text-right">WEAKNESS INDEX</th>
                 <th className="py-2.5 px-3 text-right">STEP ACCURACY %</th>
                 <th className="py-2.5 px-3 text-right">NET VALUATION %</th>
                 <th className="py-2.5 px-3 text-center">STEP STATUS</th>
@@ -766,13 +812,15 @@ export const TrackerTestAnalysis: React.FC<Props> = ({
             <tbody className="divide-y divide-[#F0EFEA]">
               {testMicroDiagnostics.map((row) => {
                 const statusBadge =
-                  row.diagnosticStatus === 'WEAK STEP'
-                    ? 'bg-[#FEF2F2] text-[#DC2626] border-[#FECACA]'
-                    : row.diagnosticStatus === 'MODERATE'
-                      ? 'bg-[#FFFBEB] text-[#B45309] border-[#FDE68A]'
-                      : row.diagnosticStatus === 'STRONG'
-                        ? 'bg-[#F0FDF4] text-[#15803D] border-[#BBF7D0]'
-                        : 'bg-[#F3F4F6] text-[#6B7280] border-[#D1D5DB]';
+                  row.diagnosticStatus === 'CRITICAL WEAK'
+                    ? 'bg-[#DC2626] text-white border-[#B91C1C]'
+                    : row.diagnosticStatus === 'WEAK STEP'
+                      ? 'bg-[#FEF2F2] text-[#DC2626] border-[#FECACA]'
+                      : row.diagnosticStatus === 'MODERATE'
+                        ? 'bg-[#FFFBEB] text-[#B45309] border-[#FDE68A]'
+                        : row.diagnosticStatus === 'STRONG'
+                          ? 'bg-[#F0FDF4] text-[#15803D] border-[#BBF7D0]'
+                          : 'bg-[#F3F4F6] text-[#6B7280] border-[#D1D5DB]';
 
                 return (
                   <tr key={row.stepCode} className="hover:bg-[#F9F8F4]/70">
@@ -814,6 +862,31 @@ export const TrackerTestAnalysis: React.FC<Props> = ({
                       {row.skippedCount > 0 && (
                         <span className="text-[10px] text-[#D97706] ml-1">
                           ({row.skippedCount}S)
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-3 px-3 text-right">
+                      <div
+                        className={`font-extrabold text-sm ${
+                          row.attemptedQuestionsCount === 0
+                            ? 'text-[#6B7280]'
+                            : row.weaknessIndex >= 55
+                              ? 'text-[#991B1B]'
+                              : row.weaknessIndex >= 35
+                                ? 'text-[#DC2626]'
+                                : row.weaknessIndex >= 15
+                                  ? 'text-[#D97706]'
+                                  : 'text-[#15803D]'
+                        }`}
+                      >
+                        {row.attemptedQuestionsCount === 0 ? '—' : row.weaknessIndex.toFixed(1)}
+                      </div>
+                      <div className="text-[10px] text-[#6B7280]">
+                        Fail {row.failureRatePct.toFixed(1)}%
+                      </div>
+                      {row.sampleConfidence === 'LOW' && (
+                        <span className="inline-block mt-0.5 px-1.5 py-0.2 rounded bg-[#FFFBEB] text-[#B45309] border border-[#FDE68A] text-[9px] font-bold">
+                          LOW SAMPLE
                         </span>
                       )}
                     </td>

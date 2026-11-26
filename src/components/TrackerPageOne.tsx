@@ -1,14 +1,8 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
-  Activity,
-  FileJson,
   Lock,
   Unlock,
-  RotateCcw,
   ArrowRight,
-  Copy,
-  Check,
-  X,
 } from 'lucide-react';
 import {
   ExamRegistryDashboard,
@@ -22,6 +16,8 @@ import {
   isTestingDomain,
 } from './ExamRegistryDashboard';
 import { TrackerPageTwo } from './TrackerPageTwo';
+import { TrackerQiqTab } from './TrackerQiqTab';
+import { TrackerTesterTab } from './TrackerTesterTab';
 import { TrackerQuestionIndex } from './TrackerQuestionIndex';
 import {
   TrackerQuestionCards,
@@ -50,6 +46,17 @@ import {
   QuestionRoutingStatus,
   type QuestionRoutingStatusState,
 } from './QuestionRoutingStatus';
+import {
+  INITIAL_ASKED_RULES,
+  INITIAL_GIVEN_RULES,
+  INITIAL_OPERATOR_RULES,
+  INITIAL_SOLVER_PATH_RULES,
+  INITIAL_SYMBOL_ALIASES,
+  type BoundaryRuleItem,
+  type OperatorRuleItem,
+  type SolverPathRuleItem,
+  type SymbolAliasItem,
+} from '../utils/givenAskedEngine';
 
 export type AttemptStatus = 'C' | 'W' | 'S';
 // [status, seconds, accuracyMark, timeMark, option]
@@ -70,6 +77,13 @@ export interface ChapterLedger {
   concepts: Record<string, Record<string, AttemptTuple[]>>;
 }
 
+function formatEvaluationDate(value?: string | Date | null): string {
+  if (!value) return 'Not evaluated';
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return 'Not evaluated';
+  return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+}
+
 // Clean empty chapter ledger (0 questions, 0 marks) for chapters that do not yet have subtopics/marks
 function createEmptyChapterLedger(
   chapterCode: string,
@@ -81,7 +95,7 @@ function createEmptyChapterLedger(
   return {
     chapterCode,
     chapterName,
-    evaluationDate: '20/11/2026',
+    evaluationDate: 'Not evaluated',
     timing: {
       fastLimit,
       mediumLimit,
@@ -270,6 +284,13 @@ export const TrackerPageOne: React.FC = () => {
       activeTestSessionId: 'test-trg-1',
       exams: INITIAL_EXAMS,
       selectedExamId: INITIAL_EXAMS[0].id,
+      askedRules: INITIAL_ASKED_RULES,
+      givenRules: INITIAL_GIVEN_RULES,
+      combineAskedFallback: true,
+      combineGivenFallback: true,
+      operatorRules: INITIAL_OPERATOR_RULES,
+      solverPathRules: INITIAL_SOLVER_PATH_RULES,
+      symbolAliases: INITIAL_SYMBOL_ALIASES,
     }),
     []
   );
@@ -285,6 +306,8 @@ export const TrackerPageOne: React.FC = () => {
   const [activeSectionView, setActiveSectionView] = useState<
     | 'part-1'
     | 'part-2'
+    | 'qiq'
+    | 'tester'
     | 'question-index'
     | 'question-cards'
     | 'test-analysis'
@@ -296,14 +319,35 @@ export const TrackerPageOne: React.FC = () => {
   const [activeTestSessionId, setActiveTestSessionId] = useState<string>(
     initialHydrated.activeTestSessionId
   );
-  const [showJsonModal, setShowJsonModal] = useState<boolean>(false);
-  const [copiedJson, setCopiedJson] = useState<boolean>(false);
 
   // Permanent Tier 1 (Domains) & Tier 2 (Chapters) Registry State + Optional 1-to-1 Step ID Swaps
   const [domains, setDomains] = useState<DomainItem[]>(initialHydrated.domains);
   const [chapters, setChapters] = useState<ChapterItem[]>(initialHydrated.chapters);
   const [stepIdOverrides, setStepIdOverrides] = useState<Record<string, string>>(
     initialHydrated.stepIdOverrides
+  );
+
+  // Solver & Extraction Registries (Asked, Given, Operator, Solver Paths)
+  const [askedRules, setAskedRules] = useState<BoundaryRuleItem[]>(
+    initialHydrated.askedRules ?? INITIAL_ASKED_RULES
+  );
+  const [givenRules, setGivenRules] = useState<BoundaryRuleItem[]>(
+    initialHydrated.givenRules ?? INITIAL_GIVEN_RULES
+  );
+  const [combineAskedFallback, setCombineAskedFallback] = useState<boolean>(
+    initialHydrated.combineAskedFallback ?? true
+  );
+  const [combineGivenFallback, setCombineGivenFallback] = useState<boolean>(
+    initialHydrated.combineGivenFallback ?? true
+  );
+  const [operatorRules, setOperatorRules] = useState<OperatorRuleItem[]>(
+    initialHydrated.operatorRules ?? INITIAL_OPERATOR_RULES
+  );
+  const [solverPathRules, setSolverPathRules] = useState<SolverPathRuleItem[]>(
+    initialHydrated.solverPathRules ?? INITIAL_SOLVER_PATH_RULES
+  );
+  const [symbolAliases, setSymbolAliases] = useState<SymbolAliasItem[]>(
+    initialHydrated.symbolAliases ?? INITIAL_SYMBOL_ALIASES
   );
 
   // Live Disk Folders fetched dynamically from `/api/registry/files` (Subtopics, Concepts, MCs NEVER saved permanently)
@@ -579,60 +623,6 @@ export const TrackerPageOne: React.FC = () => {
     return () => window.removeEventListener('angles:file-deleted', onFileDeleted);
   }, [chapters, linkedFolderByChapterCode, fetchDiskRegistryFiles]);
 
-  // Additive sync: ensure newly shipped disk questions (e.g. QA-TRG-BS-FR-24) appear in chapter ledger pool
-  useEffect(() => {
-    if (diskSyncStatus !== 'synced') return;
-    const entries = Object.entries(liveMkmlByChapter);
-    if (entries.length === 0) return;
-
-    setLedgers((prev) => {
-      let changed = false;
-      const next: Record<string, ChapterLedger> = { ...prev };
-      for (const [chapterCode, rawMkml] of entries) {
-        if (!rawMkml || !next[chapterCode]) continue;
-        const ledger = next[chapterCode];
-        const tree = scanChapterStorageAndMarks(
-          chapterCode,
-          ledger,
-          domains,
-          chapters,
-          subtopics,
-          concepts,
-          microConcepts,
-          rawMkml
-        );
-        if (tree.allQuestions.length === 0) continue;
-
-        let chapterMutated = false;
-        const nextConcepts: Record<string, Record<string, AttemptTuple[]>> = {};
-        for (const [cKey, qMap] of Object.entries(ledger.concepts)) {
-          nextConcepts[cKey] = { ...qMap };
-        }
-
-        for (const q of tree.allQuestions) {
-          const existsAnywhere = Object.values(nextConcepts).some((qMap) =>
-            Object.prototype.hasOwnProperty.call(qMap, q.uniqueId)
-          );
-          if (!existsAnywhere) {
-            const conceptKey =
-              q.subtopicShortCode && q.conceptShortCode
-                ? `${q.subtopicShortCode}-${q.conceptShortCode}`
-                : q.conceptShortCode || 'C1';
-            if (!nextConcepts[conceptKey]) nextConcepts[conceptKey] = {};
-            nextConcepts[conceptKey][q.uniqueId] = [];
-            chapterMutated = true;
-          }
-        }
-
-        if (chapterMutated) {
-          next[chapterCode] = { ...ledger, concepts: nextConcepts };
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-  }, [diskSyncStatus, liveMkmlByChapter, domains, chapters, subtopics, concepts, microConcepts]);
-
   // Shared Question Step-IDs (T1, T2, T3) mapped by Unique Question ID
   const [stepsByQid, setStepsByQid] = useState<Record<string, ExplanationStepItem[]>>(
     initialHydrated.stepsByQid
@@ -740,6 +730,13 @@ export const TrackerPageOne: React.FC = () => {
           setActiveTestSessionId(diskState.activeTestSessionId);
           setExams(diskState.exams);
           setSelectedExamId(diskState.selectedExamId);
+          setAskedRules(diskState.askedRules ?? INITIAL_ASKED_RULES);
+          setGivenRules(diskState.givenRules ?? INITIAL_GIVEN_RULES);
+          setCombineAskedFallback(diskState.combineAskedFallback ?? true);
+          setCombineGivenFallback(diskState.combineGivenFallback ?? true);
+          setOperatorRules(diskState.operatorRules ?? INITIAL_OPERATOR_RULES);
+          setSolverPathRules(diskState.solverPathRules ?? INITIAL_SOLVER_PATH_RULES);
+          setSymbolAliases(diskState.symbolAliases ?? INITIAL_SYMBOL_ALIASES);
         }
       }
 
@@ -752,10 +749,19 @@ export const TrackerPageOne: React.FC = () => {
           if (!code || !entry.ledger?.concepts) continue;
           const existing = mergedWithMarks[code] || createEmptyChapterLedger(code, entry.ledger.topic || entry.folder);
           const tc = entry.ledger.timingConfig;
+          const hasAnyAttempt = Object.values(entry.ledger.concepts || {}).some((qMap) =>
+            Object.values(qMap || {}).some((attempts) => Array.isArray(attempts) && attempts.length > 0)
+          );
+          const resolvedEvalDate = entry.ledger.lastUpdated
+            ? formatEvaluationDate(entry.ledger.lastUpdated)
+            : hasAnyAttempt
+              ? existing.evaluationDate
+              : 'Not evaluated';
           mergedWithMarks[code] = {
             ...existing,
             chapterCode: code,
             chapterName: entry.ledger.topic || existing.chapterName,
+            evaluationDate: resolvedEvalDate,
             timing:
               tc && tc.fastLimit && tc.mediumLimit && tc.slowLimit
                 ? {
@@ -779,6 +785,94 @@ export const TrackerPageOne: React.FC = () => {
       cancelled = true;
     };
   }, [defaultBundle, initialHydrated.ledgers, initialHydrated.restoredFromLocal, initialHydrated.savedAt]);
+
+  // Authoritative disk sync: reconcile each linked chapter's question pool strictly against real disk <Qn> blocks.
+  // Preserves all real attempt histories while automatically pruning phantom/legacy sandbox keys or deleted questions.
+  useEffect(() => {
+    if (!diskHydrated || diskSyncStatus !== 'synced') return;
+    const linkedChapters = Object.keys(linkedFolderByChapterCode);
+    if (linkedChapters.length === 0) return;
+
+    setLedgers((prev) => {
+      let changed = false;
+      const next: Record<string, ChapterLedger> = { ...prev };
+
+      for (const chapterCode of linkedChapters) {
+        const ledger = next[chapterCode];
+        if (!ledger) continue;
+        const rawMkml = liveMkmlByChapter[chapterCode] || '';
+        const tree = scanChapterStorageAndMarks(
+          chapterCode,
+          ledger,
+          domains,
+          chapters,
+          subtopics,
+          concepts,
+          microConcepts,
+          rawMkml
+        );
+
+        const existingAttemptsByQid = new Map<string, AttemptTuple[]>();
+        for (const qMap of Object.values(ledger.concepts || {})) {
+          for (const [qid, history] of Object.entries(qMap || {})) {
+            existingAttemptsByQid.set(qid.toUpperCase(), Array.isArray(history) ? history : []);
+          }
+        }
+
+        const reconciledConcepts: Record<string, Record<string, AttemptTuple[]>> = {};
+        for (const q of tree.allQuestions) {
+          const conceptKey =
+            q.subtopicShortCode && q.conceptShortCode
+              ? `${q.subtopicShortCode}-${q.conceptShortCode}`
+              : q.conceptShortCode || 'C1';
+          if (!reconciledConcepts[conceptKey]) reconciledConcepts[conceptKey] = {};
+          reconciledConcepts[conceptKey][q.uniqueId] =
+            existingAttemptsByQid.get(q.uniqueId.toUpperCase()) || [];
+        }
+
+        // Check structural equality (concept keys + exact question IDs per concept) to avoid redundant state updates
+        const oldConceptKeys = Object.keys(ledger.concepts || {});
+        const newConceptKeys = Object.keys(reconciledConcepts);
+        let differs = oldConceptKeys.length !== newConceptKeys.length;
+        if (!differs) {
+          for (const cKey of newConceptKeys) {
+            const oldMap = ledger.concepts[cKey];
+            const newMap = reconciledConcepts[cKey];
+            if (!oldMap) {
+              differs = true;
+              break;
+            }
+            const oldQids = Object.keys(oldMap);
+            const newQids = Object.keys(newMap);
+            if (
+              oldQids.length !== newQids.length ||
+              newQids.some((qid) => !Object.prototype.hasOwnProperty.call(oldMap, qid))
+            ) {
+              differs = true;
+              break;
+            }
+          }
+        }
+
+        if (differs) {
+          next[chapterCode] = { ...ledger, concepts: reconciledConcepts };
+          changed = true;
+        }
+      }
+
+      return changed ? next : prev;
+    });
+  }, [
+    diskHydrated,
+    diskSyncStatus,
+    linkedFolderByChapterCode,
+    liveMkmlByChapter,
+    domains,
+    chapters,
+    subtopics,
+    concepts,
+    microConcepts,
+  ]);
 
   // Flush any pending disk write on tab close / refresh using keepalive
   useEffect(() => {
@@ -810,6 +904,13 @@ export const TrackerPageOne: React.FC = () => {
       activeTestSessionId,
       exams,
       selectedExamId,
+      askedRules,
+      givenRules,
+      combineAskedFallback,
+      combineGivenFallback,
+      operatorRules,
+      solverPathRules,
+      symbolAliases,
     };
     const savedAt = savePersistedTrackerState(snapshot);
     pendingDiskFlushRef.current = { snapshot, savedAt };
@@ -830,6 +931,13 @@ export const TrackerPageOne: React.FC = () => {
     activeTestSessionId,
     exams,
     selectedExamId,
+    askedRules,
+    givenRules,
+    combineAskedFallback,
+    combineGivenFallback,
+    operatorRules,
+    solverPathRules,
+    symbolAliases,
   ]);
 
   // Listen for backup import / reset commands from 06 Settings
@@ -845,6 +953,13 @@ export const TrackerPageOne: React.FC = () => {
       setActiveTestSessionId(next.activeTestSessionId);
       setExams(next.exams);
       setSelectedExamId(next.selectedExamId);
+      setAskedRules(next.askedRules ?? INITIAL_ASKED_RULES);
+      setGivenRules(next.givenRules ?? INITIAL_GIVEN_RULES);
+      setCombineAskedFallback(next.combineAskedFallback ?? true);
+      setCombineGivenFallback(next.combineGivenFallback ?? true);
+      setOperatorRules(next.operatorRules ?? INITIAL_OPERATOR_RULES);
+      setSolverPathRules(next.solverPathRules ?? INITIAL_SOLVER_PATH_RULES);
+      setSymbolAliases(next.symbolAliases ?? INITIAL_SYMBOL_ALIASES);
       const nextLedger =
         next.ledgers[next.activeChapterKey] ||
         next.ledgers.TRG ||
@@ -977,7 +1092,11 @@ export const TrackerPageOne: React.FC = () => {
         ? 'exam-info'
         : activeSectionView === 'registry'
           ? 'registry'
-          : 'tracker';
+          : activeSectionView === 'qiq'
+            ? 'qiq'
+            : activeSectionView === 'tester'
+              ? 'tester'
+              : 'tracker';
     window.dispatchEvent(
       new CustomEvent('angles:sync-nav', { detail: { page: targetNavPage } })
     );
@@ -1395,181 +1514,6 @@ export const TrackerPageOne: React.FC = () => {
     };
   }, [currentLedger]);
 
-  // Simulate recording an attempt on the first Not Asked question (or cycling through pool)
-  const handleSimulateAttempt = (status: AttemptStatus, seconds: number, option = 'A') => {
-    setLedgers((prev) => {
-      const target = prev[activeChapterKey];
-      if (!target) return prev;
-      const nextConcepts: Record<string, Record<string, AttemptTuple[]>> = {};
-
-      // Deep clone
-      Object.entries(target.concepts).forEach(([cMid, qMap]) => {
-        nextConcepts[cMid] = {};
-        Object.entries(qMap).forEach(([qid, arr]) => {
-          nextConcepts[cMid][qid] = [...arr];
-        });
-      });
-
-      // Find first pending question, or if none pending, append a new question to first concept
-      let targetCMid = Object.keys(nextConcepts)[0] || 'C1';
-      let targetQid: string | null = null;
-
-      for (const [cMid, qMap] of Object.entries(nextConcepts)) {
-        for (const [qid, arr] of Object.entries(qMap)) {
-          if (arr.length === 0) {
-            targetCMid = cMid;
-            targetQid = qid;
-            break;
-          }
-        }
-        if (targetQid) break;
-      }
-
-      if (!targetQid) {
-        const existingCount = Object.keys(nextConcepts[targetCMid] || {}).length;
-        targetQid = `${target.chapterCode}-${targetCMid}-Qn${existingCount + 1}`;
-        if (!nextConcepts[targetCMid]) nextConcepts[targetCMid] = {};
-        nextConcepts[targetCMid][targetQid] = [];
-      }
-
-      const { accMark, timeMark } = computeAttemptMarks(status, seconds, target.timing);
-      nextConcepts[targetCMid][targetQid].push([status, seconds, accMark, timeMark, option]);
-
-      return {
-        ...prev,
-        [activeChapterKey]: {
-          ...target,
-          concepts: nextConcepts,
-        },
-      };
-    });
-  };
-
-  const handleResetSkeleton = () => {
-    const target = ledgers[activeChapterKey];
-    if (!target) return;
-    const cleanConcepts: Record<string, Record<string, AttemptTuple[]>> = {};
-    Object.entries(target.concepts).forEach(([cMid, qMap]) => {
-      cleanConcepts[cMid] = {};
-      Object.keys(qMap).forEach((qid) => {
-        cleanConcepts[cMid][qid] = [];
-      });
-    });
-    const resetLedger: ChapterLedger = {
-      ...target,
-      concepts: cleanConcepts,
-    };
-    setLedgers((prev) => ({
-      ...prev,
-      [activeChapterKey]: resetLedger,
-    }));
-    void syncLedgerToMarksFile(resetLedger);
-  };
-
-  // Simulate ingesting a new batch of questions into the chapter folder (grows TQ and MM = TQ * 3)
-  const handleIngestBatch = (count: number) => {
-    setLedgers((prev) => {
-      const target = prev[activeChapterKey];
-      if (!target) return prev;
-      const nextConcepts: Record<string, Record<string, AttemptTuple[]>> = {};
-      Object.entries(target.concepts).forEach(([cMid, qMap]) => {
-        nextConcepts[cMid] = { ...qMap };
-      });
-
-      const firstMid = Object.keys(nextConcepts)[0] || 'C1';
-      if (!nextConcepts[firstMid]) nextConcepts[firstMid] = {};
-      const startIdx = Object.keys(nextConcepts[firstMid]).length + 1;
-
-      for (let i = 0; i < count; i++) {
-        const newQid = `${target.chapterCode}-${firstMid}-Qn${startIdx + i}`;
-        nextConcepts[firstMid][newQid] = [];
-      }
-
-      return {
-        ...prev,
-        [activeChapterKey]: {
-          ...target,
-          concepts: nextConcepts,
-        },
-      };
-    });
-  };
-
-  const handleRestoreDemoData = () => {
-    setLedgers(INITIAL_LEDGERS);
-  };
-
-  const handleCopyJson = () => {
-    navigator.clipboard.writeText(JSON.stringify(currentLedger, null, 2));
-    setCopiedJson(true);
-    setTimeout(() => setCopiedJson(false), 1800);
-  };
-
-  // Simulate recording an attempt inside a specific Part 2 Subtopic / Concept scope
-  const handleSimulateAttemptInScope = (
-    targetUniqueIds: string[],
-    status: AttemptStatus,
-    seconds: number,
-    conceptKeyHint = 'C1'
-  ) => {
-    setLedgers((prev) => {
-      const target = prev[activeChapterKey];
-      if (!target) return prev;
-      const nextConcepts: Record<string, Record<string, AttemptTuple[]>> = {};
-
-      Object.entries(target.concepts).forEach(([cMid, qMap]) => {
-        nextConcepts[cMid] = {};
-        Object.entries(qMap).forEach(([qid, arr]) => {
-          nextConcepts[cMid][qid] = [...arr];
-        });
-      });
-
-      const { accMark, timeMark } = computeAttemptMarks(status, seconds, target.timing);
-      const idSet = new Set(targetUniqueIds);
-
-      // 1. Try to find an unattempted question inside the selected scope
-      for (const [cMid, qMap] of Object.entries(nextConcepts)) {
-        for (const [qid, arr] of Object.entries(qMap)) {
-          if (idSet.has(qid) && arr.length === 0) {
-            nextConcepts[cMid][qid].push([status, seconds, accMark, timeMark, 'A']);
-            return {
-              ...prev,
-              [activeChapterKey]: { ...target, concepts: nextConcepts },
-            };
-          }
-        }
-      }
-
-      // 2. Otherwise append a new attempt to the first question matching the selected scope
-      for (const [cMid, qMap] of Object.entries(nextConcepts)) {
-        for (const [qid] of Object.entries(qMap)) {
-          if (idSet.has(qid)) {
-            nextConcepts[cMid][qid].push([status, seconds, accMark, timeMark, 'A']);
-            return {
-              ...prev,
-              [activeChapterKey]: { ...target, concepts: nextConcepts },
-            };
-          }
-        }
-      }
-
-      // 3. Fallback: append to first concept
-      const fallbackMid = Object.keys(nextConcepts)[0] || conceptKeyHint;
-      if (!nextConcepts[fallbackMid]) nextConcepts[fallbackMid] = {};
-      const firstQid =
-        Object.keys(nextConcepts[fallbackMid])[0] ||
-        targetUniqueIds[0] ||
-        `${target.chapterCode}-${fallbackMid}-1`;
-      if (!nextConcepts[fallbackMid][firstQid]) nextConcepts[fallbackMid][firstQid] = [];
-      nextConcepts[fallbackMid][firstQid].push([status, seconds, accMark, timeMark, 'A']);
-
-      return {
-        ...prev,
-        [activeChapterKey]: { ...target, concepts: nextConcepts },
-      };
-    });
-  };
-
   // Record evaluated test questions from Question Index (3) Test Mode -> append A+1 to dedicated tracker-ledger.json
   const handleRecordEvaluatedTest = async (
     evaluations: {
@@ -1624,16 +1568,17 @@ export const TrackerPageOne: React.FC = () => {
       }
     });
 
+    const now = new Date();
+    const todayStr = formatEvaluationDate(now);
+
     setLedgers((prev) => ({
       ...prev,
-      [activeChapterKey]: { ...target, concepts: nextConcepts },
+      [activeChapterKey]: { ...target, evaluationDate: todayStr, concepts: nextConcepts },
     }));
 
     // Register this completed Test Mode session in Test Analysis
     const nextNum = testSessions.length + 1;
     const newSessionId = `test-${Date.now()}`;
-    const now = new Date();
-    const todayStr = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`;
     const newSession: TestSessionRecord = {
       id: newSessionId,
       label: `test id(${nextNum})`,
@@ -1734,19 +1679,23 @@ export const TrackerPageOne: React.FC = () => {
           ledger={currentLedger}
           allLedgers={visibleLedgers}
           onSelectChapter={handleSelectChapter}
-          onSimulateAttemptInScope={handleSimulateAttemptInScope}
           onBackToPartOne={() => setActiveSectionView('part-1')}
           onOpenQuestionIndex={() => setActiveSectionView('question-index')}
-          onLaunchScopedQuestionsDirect={(questions, pathLabel, mode) => {
-            setLaunchedCardItems(
-              questions.map((q) => ({
-                question: q,
-                pathLabel,
-              }))
-            );
-            setLaunchedModality(mode);
-            setActiveSectionView('question-cards');
-          }}
+          domains={domains}
+          chapters={chapters}
+          subtopics={subtopics}
+          concepts={concepts}
+          microConcepts={microConcepts}
+          liveChapterMkml={liveMkmlByChapter[currentLedger.chapterCode]}
+        />
+      )}
+
+      {/* TOP-LEVEL TAB 11: QIQ (STEP-ID & MICRO CONCEPT DIAGNOSTICS TABLE) */}
+      {activeSectionView === 'qiq' && (
+        <TrackerQiqTab
+          ledger={currentLedger}
+          allLedgers={visibleLedgers}
+          onSelectChapter={handleSelectChapter}
           domains={domains}
           chapters={chapters}
           subtopics={subtopics}
@@ -1754,6 +1703,26 @@ export const TrackerPageOne: React.FC = () => {
           microConcepts={microConcepts}
           stepsByQid={stepsByQid}
           liveChapterMkml={liveMkmlByChapter[currentLedger.chapterCode]}
+        />
+      )}
+
+      {/* TOP-LEVEL TAB 12: TESTER (TAB A PASTE + TAB B BOOKLET + GIVEN/ASKED + SOLVER) */}
+      {activeSectionView === 'tester' && (
+        <TrackerTesterTab
+          domains={domains}
+          chapters={chapters}
+          subtopics={subtopics}
+          concepts={concepts}
+          microConcepts={microConcepts}
+          givenRules={givenRules}
+          askedRules={askedRules}
+          combineGivenFallback={combineGivenFallback}
+          combineAskedFallback={combineAskedFallback}
+          operatorRules={operatorRules}
+          solverPathRules={solverPathRules}
+          setSolverPathRules={setSolverPathRules}
+          symbolAliases={symbolAliases}
+          setSymbolAliases={setSymbolAliases}
         />
       )}
 
@@ -1851,6 +1820,20 @@ export const TrackerPageOne: React.FC = () => {
           setExams={setExams}
           selectedExamId={selectedExamId}
           setSelectedExamId={setSelectedExamId}
+          askedRules={askedRules}
+          setAskedRules={setAskedRules}
+          givenRules={givenRules}
+          setGivenRules={setGivenRules}
+          combineAskedFallback={combineAskedFallback}
+          setCombineAskedFallback={setCombineAskedFallback}
+          combineGivenFallback={combineGivenFallback}
+          setCombineGivenFallback={setCombineGivenFallback}
+          operatorRules={operatorRules}
+          setOperatorRules={setOperatorRules}
+          solverPathRules={solverPathRules}
+          setSolverPathRules={setSolverPathRules}
+          symbolAliases={symbolAliases}
+          setSymbolAliases={setSymbolAliases}
         />
       )}
 
@@ -1978,107 +1961,16 @@ export const TrackerPageOne: React.FC = () => {
           )}
         </div>
 
-        {/* Right: Evaluation Date (No duplicate Part 2 button at top) */}
+        {/* Right: Evaluation Date (derived from real tracker-ledger.json lastUpdated / Test Mode submissions) */}
         <div className="flex items-center gap-4">
           <div className="text-right">
             <div className="text-[10px] font-mono uppercase tracking-widest text-[#6B7280]">
-              EVALUATION DATE
+              LAST EVALUATED
             </div>
             <div className="text-sm font-mono font-bold text-[#111827] mt-0.5">
-              {currentLedger.evaluationDate}
+              {currentLedger.evaluationDate || 'Not evaluated'}
             </div>
           </div>
-        </div>
-      </div>
-
-      {/* CARD 2: LEDGER SKELETON & SANDBOX BAR */}
-      <div className="w-full bg-white border border-[#DFDDD4] rounded-lg px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 shadow-2xs">
-        {/* Left: Pool Counts */}
-        <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
-          <span className="flex items-center gap-1.5 font-bold text-[#1D4ED8]">
-            <Activity className="w-3.5 h-3.5" />
-            <span>CHAPTER POOL (TQ):</span>
-          </span>
-
-          <span className="px-2 py-0.5 bg-[#EFF6FF] border border-[#BFDBFE] rounded text-[#1D4ED8] font-bold">
-            Total Qs: {stats.TQ} (MM = {stats.TQ} × 3 = {stats.MM})
-          </span>
-          <span className="px-2 py-0.5 bg-[#F9F8F4] border border-[#DFDDD4] rounded text-[#111827]">
-            Attempted: <strong className="text-[#16A34A]">{stats.attemptedCount}</strong>
-          </span>
-          <span className="px-2 py-0.5 bg-[#F9F8F4] border border-[#DFDDD4] rounded text-[#111827]">
-            Not Asked: <strong className="text-[#D97706]">{stats.NQNA}</strong>
-          </span>
-        </div>
-
-        {/* Right: Action Buttons */}
-        <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-mono">
-          <button
-            onClick={() => handleIngestBatch(10)}
-            className="px-2.5 py-1 bg-[#EFF6FF] hover:bg-[#DBEAFE] text-[#1D4ED8] border border-[#BFDBFE] rounded font-semibold transition-colors cursor-pointer"
-            title="Simulate adding a new batch of 10 mapped questions to this chapter folder"
-          >
-            +Batch (10 Qs)
-          </button>
-
-          <button
-            onClick={() => handleSimulateAttempt('C', Math.max(1, timing.fastLimit - 15), 'A')}
-            className="px-2.5 py-1 bg-[#F0FDF4] hover:bg-[#DCFCE7] text-[#15803D] border border-[#BBF7D0] rounded font-semibold transition-colors cursor-pointer"
-          >
-            +Correct ({Math.max(1, timing.fastLimit - 15)}s)
-          </button>
-
-          <button
-            onClick={() =>
-              handleSimulateAttempt(
-                'C',
-                Math.floor((timing.fastLimit + timing.mediumLimit) / 2),
-                'B'
-              )
-            }
-            className="px-2.5 py-1 bg-[#EFF6FF] hover:bg-[#DBEAFE] text-[#1D4ED8] border border-[#BFDBFE] rounded font-semibold transition-colors cursor-pointer"
-          >
-            +Med ({Math.floor((timing.fastLimit + timing.mediumLimit) / 2)}s)
-          </button>
-
-          <button
-            onClick={() => handleSimulateAttempt('W', timing.mediumLimit - 15, 'D')}
-            className="px-2.5 py-1 bg-[#FEF2F2] hover:bg-[#FEE2E2] text-[#DC2626] border border-[#FECACA] rounded font-semibold transition-colors cursor-pointer"
-          >
-            +Wrong ({timing.mediumLimit - 15}s)
-          </button>
-
-          <button
-            onClick={() => handleSimulateAttempt('S', 30, '-')}
-            className="px-2.5 py-1 bg-[#FFFBEB] hover:bg-[#FEF3C7] text-[#B45309] border border-[#FDE68A] rounded font-semibold transition-colors cursor-pointer"
-          >
-            +Skip
-          </button>
-
-          <button
-            onClick={handleResetSkeleton}
-            className="px-2 py-1 bg-[#F9F8F4] hover:bg-[#EFECE6] text-[#4B5563] border border-[#DFDDD4] rounded flex items-center gap-1 transition-colors cursor-pointer"
-            title="Clear all attempts to 0 (Clean Skeleton)"
-          >
-            <RotateCcw className="w-3 h-3" />
-            <span>Clear</span>
-          </button>
-
-          <button
-            onClick={handleRestoreDemoData}
-            className="px-2 py-1 bg-[#F9F8F4] hover:bg-[#EFECE6] text-[#4B5563] border border-[#DFDDD4] rounded transition-colors cursor-pointer"
-            title="Restore sample evaluation state"
-          >
-            Reset
-          </button>
-
-          <button
-            onClick={() => setShowJsonModal(true)}
-            className="px-2.5 py-1 bg-[#EFF6FF] hover:bg-[#DBEAFE] text-[#1D4ED8] border border-[#BFDBFE] rounded font-semibold flex items-center gap-1 transition-colors cursor-pointer"
-          >
-            <FileJson className="w-3.5 h-3.5" />
-            <span>Ledger JSON</span>
-          </button>
         </div>
       </div>
 
@@ -2491,52 +2383,6 @@ export const TrackerPageOne: React.FC = () => {
             </button>
           </div>
         </>
-      )}
-
-      {/* LEDGER JSON TREE MODAL */}
-      {showJsonModal && (
-        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white border border-[#DFDDD4] rounded-xl max-w-2xl w-full overflow-hidden shadow-2xl">
-            <div className="flex items-center justify-between px-4 py-3 bg-[#F9F8F4] border-b border-[#DFDDD4]">
-              <div className="flex items-center gap-2 text-xs font-mono font-bold text-[#111827]">
-                <FileJson className="w-4 h-4 text-[#1D4ED8]" />
-                <span>Topic Statistics Ledger JSON Tree ({currentLedger.chapterCode})</span>
-              </div>
-              <button
-                onClick={() => setShowJsonModal(false)}
-                className="p-1 text-[#6B7280] hover:text-[#111827] rounded"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="p-4 max-h-[420px] overflow-y-auto bg-[#F5F4EF] font-mono text-xs text-[#111827]">
-              <pre className="whitespace-pre-wrap break-all">
-                {JSON.stringify(currentLedger, null, 2)}
-              </pre>
-            </div>
-            <div className="flex items-center justify-between px-4 py-2.5 bg-[#F9F8F4] border-t border-[#DFDDD4] text-[11px] font-mono">
-              <span className="text-[#6B7280]">
-                Hierarchy: Chapter [{currentLedger.chapterCode}] → Concept MID → Question ID →
-                [[status, sec, acc, time, opt]]
-              </span>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={handleResetSkeleton}
-                  className="px-2.5 py-1 bg-[#FEF2F2] text-[#DC2626] border border-[#FECACA] rounded font-semibold hover:bg-[#FEE2E2]"
-                >
-                  Reset to Clean Skeleton
-                </button>
-                <button
-                  onClick={handleCopyJson}
-                  className="px-3 py-1 bg-[#1D4ED8] text-white rounded font-semibold flex items-center gap-1 hover:bg-[#1E40AF]"
-                >
-                  {copiedJson ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{copiedJson ? 'Copied' : 'Copy JSON'}</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
       )}
     </div>
   );

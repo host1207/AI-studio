@@ -159,6 +159,8 @@ declare global {
       view:
         | 'part-1'
         | 'part-2'
+        | 'qiq'
+        | 'tester'
         | 'question-index'
         | 'question-cards'
         | 'test-analysis'

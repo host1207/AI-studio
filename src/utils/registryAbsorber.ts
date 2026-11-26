@@ -178,6 +178,7 @@ export function absorbLiveRegistryFromFiles(
   }
 
   const validChapterByFullId = new Map<string, { chapter: ChapterItem; fullId: string }>();
+  const validChapterByCode = new Map<string, { chapter: ChapterItem; fullId: string }>();
   const linkedFolderByChapterCode: Record<string, string> = {};
   const matchedFolderNames = new Set<string>();
 
@@ -194,8 +195,36 @@ export function absorbLiveRegistryFromFiles(
     if (isTestingDomainEntry(dom)) continue;
 
     const fullId = `${dom.code}-${ch.code}`;
-    validChapterByFullId.set(normalizeKey(fullId), { chapter: ch, fullId });
+    const entry = { chapter: ch, fullId };
+    validChapterByFullId.set(normalizeKey(fullId), entry);
+    validChapterByCode.set(normalizeKey(ch.code), entry);
   }
+
+  /**
+   * Resolves a `<Domain>-<Chapter>` tag pair as valid whenever BOTH the domain code
+   * and chapter code are registered active entries, even if the chapter currently
+   * resides under a different registered domain in the Registry.
+   */
+  const resolveRegisteredDomainChapter = (
+    domPart: string,
+    chPart: string
+  ): { domEntry: DomainItem; chEntry: { chapter: ChapterItem; fullId: string } } | null => {
+    const domEntry = validDomainByKey.get(normalizeKey(domPart));
+    if (!domEntry || isTestingDomainEntry(domEntry)) return null;
+    const exactMatch = validChapterByFullId.get(normalizeKey(`${domPart}-${chPart}`));
+    if (exactMatch) return { domEntry, chEntry: exactMatch };
+    const byCodeMatch = validChapterByCode.get(normalizeKey(chPart));
+    if (byCodeMatch) {
+      return {
+        domEntry,
+        chEntry: {
+          chapter: byCodeMatch.chapter,
+          fullId: `${domEntry.code}-${byCodeMatch.chapter.code}`,
+        },
+      };
+    }
+    return null;
+  };
 
   const unregisteredDiskFolders = diskFolders.filter(
     (f) => !matchedFolderNames.has(f.folder.toLowerCase())
@@ -320,7 +349,7 @@ export function absorbLiveRegistryFromFiles(
       }
       const [domPart, chPart, stPart] = parts;
       const domEntry = validDomainByKey.get(normalizeKey(domPart));
-      if (!domEntry) {
+      if (!domEntry || isTestingDomainEntry(domEntry)) {
         pushInvalid(
           'Subtopic',
           rawId,
@@ -330,18 +359,18 @@ export function absorbLiveRegistryFromFiles(
         );
         continue;
       }
-      const chapterFullKey = normalizeKey(`${domPart}-${chPart}`);
-      const chEntry = validChapterByFullId.get(chapterFullKey);
-      if (!chEntry) {
+      const resolved = resolveRegisteredDomainChapter(domPart, chPart);
+      if (!resolved) {
         pushInvalid(
           'Subtopic',
           rawId,
           name,
           doc.sourceLabel,
-          `Chapter "${domPart}-${chPart}" is not registered in Chapter Registry.`
+          `Chapter "${chPart}" is not registered in Chapter Registry.`
         );
         continue;
       }
+      const chEntry = resolved.chEntry;
 
       const canonicalFullId = `${domEntry.code}-${chEntry.chapter.code}-${stPart}`;
       const mapKey = normalizeKey(canonicalFullId);
@@ -386,14 +415,13 @@ export function absorbLiveRegistryFromFiles(
         continue;
       }
       const [domPart, chPart, stPart, conPart] = parts;
-      const chapterFullKey = normalizeKey(`${domPart}-${chPart}`);
-      if (!validChapterByFullId.has(chapterFullKey)) {
+      if (!resolveRegisteredDomainChapter(domPart, chPart)) {
         pushInvalid(
           'Concept',
           rawId,
           name,
           doc.sourceLabel,
-          `Parent chapter "${domPart}-${chPart}" is not registered in Chapter Registry.`
+          `Parent chapter "${domPart}-${chPart}" is not registered in Domain/Chapter Registry.`
         );
         continue;
       }
@@ -464,14 +492,13 @@ export function absorbLiveRegistryFromFiles(
         );
         continue;
       }
-      const chapterFullKey = normalizeKey(`${domPart}-${chPart}`);
-      if (!validChapterByFullId.has(chapterFullKey)) {
+      if (!resolveRegisteredDomainChapter(domPart, chPart)) {
         pushInvalid(
           'MicroConcept',
           rawId,
           name,
           doc.sourceLabel,
-          `Parent chapter "${domPart}-${chPart}" is not registered in Chapter Registry.`
+          `Parent chapter "${domPart}-${chPart}" is not registered in Domain/Chapter Registry.`
         );
         continue;
       }

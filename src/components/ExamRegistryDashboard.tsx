@@ -26,6 +26,17 @@ import type {
   InvalidRegistryTag,
   OrphanedStepOverride,
 } from '../utils/registryAbsorber';
+import type {
+  BoundaryRuleItem,
+  OperatorRuleItem,
+  SolverPathRuleItem,
+  SymbolAliasItem,
+} from '../utils/givenAskedEngine';
+import {
+  BoundaryRegistrySection,
+  OperatorRegistrySection,
+  SolverRegistrySection,
+} from './RegistrySolverSections';
 
 // ============================================================================
 // 1. DATA MODELS FOR THE 5-TIER REGISTRY & SELF-CONTAINED EXAM METADATA
@@ -111,6 +122,7 @@ export interface ExamDomainWeight {
 
 export interface ExamProfile {
   id: string;
+  examId?: number;
   name: string;
   domains: ExamDomainWeight[];
 }
@@ -275,6 +287,20 @@ interface Props {
   setExams: React.Dispatch<React.SetStateAction<ExamProfile[]>>;
   selectedExamId: string;
   setSelectedExamId: React.Dispatch<React.SetStateAction<string>>;
+  askedRules: BoundaryRuleItem[];
+  setAskedRules: React.Dispatch<React.SetStateAction<BoundaryRuleItem[]>>;
+  givenRules: BoundaryRuleItem[];
+  setGivenRules: React.Dispatch<React.SetStateAction<BoundaryRuleItem[]>>;
+  combineAskedFallback: boolean;
+  setCombineAskedFallback: React.Dispatch<React.SetStateAction<boolean>>;
+  combineGivenFallback: boolean;
+  setCombineGivenFallback: React.Dispatch<React.SetStateAction<boolean>>;
+  operatorRules: OperatorRuleItem[];
+  setOperatorRules: React.Dispatch<React.SetStateAction<OperatorRuleItem[]>>;
+  solverPathRules: SolverPathRuleItem[];
+  setSolverPathRules: React.Dispatch<React.SetStateAction<SolverPathRuleItem[]>>;
+  symbolAliases: SymbolAliasItem[];
+  setSymbolAliases: React.Dispatch<React.SetStateAction<SymbolAliasItem[]>>;
 }
 
 export const ExamRegistryDashboard: React.FC<Props> = ({
@@ -305,10 +331,32 @@ export const ExamRegistryDashboard: React.FC<Props> = ({
   setExams,
   selectedExamId,
   setSelectedExamId,
+  askedRules,
+  setAskedRules,
+  givenRules,
+  setGivenRules,
+  combineAskedFallback,
+  setCombineAskedFallback,
+  combineGivenFallback,
+  setCombineGivenFallback,
+  operatorRules,
+  setOperatorRules,
+  solverPathRules,
+  setSolverPathRules,
+  symbolAliases,
+  setSymbolAliases,
 }) => {
-  // 5 Separate Pages inside Registry
+  // 9 Separate Pages inside Registry (1-5 Tier + 6-9 Solver Engine Registries)
   const [registryPage, setRegistryPage] = useState<
-    'domain' | 'chapter' | 'subtopic' | 'concept' | 'micro'
+    | 'domain'
+    | 'chapter'
+    | 'subtopic'
+    | 'concept'
+    | 'micro'
+    | 'asked'
+    | 'given'
+    | 'operator'
+    | 'solver'
   >('domain');
 
   // 1a) Domain Creation Form State
@@ -1302,7 +1350,24 @@ export const ExamRegistryDashboard: React.FC<Props> = ({
                 <span>Rescan Disk Files</span>
               </button>
               <span className="text-[#6B7280]">
-                Page {registryPage === 'domain' ? '1/5' : registryPage === 'chapter' ? '2/5' : registryPage === 'subtopic' ? '3/5' : registryPage === 'concept' ? '4/5' : '5/5'}
+                Page{' '}
+                {registryPage === 'domain'
+                  ? '1/9'
+                  : registryPage === 'chapter'
+                    ? '2/9'
+                    : registryPage === 'subtopic'
+                      ? '3/9'
+                      : registryPage === 'concept'
+                        ? '4/9'
+                        : registryPage === 'micro'
+                          ? '5/9'
+                          : registryPage === 'asked'
+                            ? '6/9'
+                            : registryPage === 'given'
+                              ? '7/9'
+                              : registryPage === 'operator'
+                                ? '8/9'
+                                : '9/9'}
               </span>
             </div>
           </div>
@@ -1369,80 +1434,140 @@ export const ExamRegistryDashboard: React.FC<Props> = ({
             </div>
           )}
 
-          {/* Top 5-Box Bar Matching 5-Tier Cascading Hierarchy */}
-          <div className="grid grid-cols-2 sm:grid-cols-5 border-b border-[#DFDDD4] bg-[#F5F4EF] text-xs font-mono">
+          {/* Top 9-Box Bar: 5-Tier Cascading Hierarchy + 4 Solver Engine Registries */}
+          <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-9 border-b border-[#DFDDD4] bg-[#F5F4EF] text-xs font-mono">
             <button
               type="button"
               onClick={() => setRegistryPage('domain')}
-              className={`py-3 px-3 text-left sm:text-center border-r border-b sm:border-b-0 border-[#DFDDD4] transition-colors cursor-pointer ${
+              className={`py-2.5 px-2.5 text-left sm:text-center border-r border-b lg:border-b-0 border-[#DFDDD4] transition-colors cursor-pointer ${
                 registryPage === 'domain'
                   ? 'bg-white text-[#1D4ED8] font-bold border-t-2 border-t-[#1D4ED8]'
                   : 'text-[#4B5563] hover:bg-white/60'
               }`}
             >
-              <div>Domain Registry</div>
+              <div>Domain</div>
               <div className="text-[10px] text-[#6B7280] mt-0.5">
-                Page 1 · Permanent ({domains.length})
+                P1 · Perm ({domains.length})
               </div>
             </button>
 
             <button
               type="button"
               onClick={() => setRegistryPage('chapter')}
-              className={`py-3 px-3 text-left sm:text-center border-r border-b sm:border-b-0 border-[#DFDDD4] transition-colors cursor-pointer ${
+              className={`py-2.5 px-2.5 text-left sm:text-center border-r border-b lg:border-b-0 border-[#DFDDD4] transition-colors cursor-pointer ${
                 registryPage === 'chapter'
                   ? 'bg-white text-[#1D4ED8] font-bold border-t-2 border-t-[#1D4ED8]'
                   : 'text-[#4B5563] hover:bg-white/60'
               }`}
             >
-              <div>Chapter Registry</div>
+              <div>Chapter</div>
               <div className="text-[10px] text-[#6B7280] mt-0.5">
-                Page 2 · Permanent ({chapters.length})
+                P2 · Perm ({chapters.length})
               </div>
             </button>
 
             <button
               type="button"
               onClick={() => setRegistryPage('subtopic')}
-              className={`py-3 px-3 text-left sm:text-center border-r border-b sm:border-b-0 border-[#DFDDD4] transition-colors cursor-pointer ${
+              className={`py-2.5 px-2.5 text-left sm:text-center border-r border-b lg:border-b-0 border-[#DFDDD4] transition-colors cursor-pointer ${
                 registryPage === 'subtopic'
                   ? 'bg-white text-[#1D4ED8] font-bold border-t-2 border-t-[#1D4ED8]'
                   : 'text-[#4B5563] hover:bg-white/60'
               }`}
             >
-              <div>Subtopic Registry</div>
+              <div>Subtopic</div>
               <div className="text-[10px] text-[#15803D] mt-0.5">
-                Page 3 · Live ({subtopics.length})
+                P3 · Live ({subtopics.length})
               </div>
             </button>
 
             <button
               type="button"
               onClick={() => setRegistryPage('concept')}
-              className={`py-3 px-3 text-left sm:text-center border-r border-b sm:border-b-0 border-[#DFDDD4] transition-colors cursor-pointer ${
+              className={`py-2.5 px-2.5 text-left sm:text-center border-r border-b lg:border-b-0 border-[#DFDDD4] transition-colors cursor-pointer ${
                 registryPage === 'concept'
                   ? 'bg-white text-[#1D4ED8] font-bold border-t-2 border-t-[#1D4ED8]'
                   : 'text-[#4B5563] hover:bg-white/60'
               }`}
             >
-              <div>Concept Registry</div>
+              <div>Concept</div>
               <div className="text-[10px] text-[#15803D] mt-0.5">
-                Page 4 · Live ({concepts.length})
+                P4 · Live ({concepts.length})
               </div>
             </button>
 
             <button
               type="button"
               onClick={() => setRegistryPage('micro')}
-              className={`py-3 px-3 text-left sm:text-center col-span-2 sm:col-span-1 transition-colors cursor-pointer ${
+              className={`py-2.5 px-2.5 text-left sm:text-center border-r border-b lg:border-b-0 border-[#DFDDD4] transition-colors cursor-pointer ${
                 registryPage === 'micro'
                   ? 'bg-white text-[#1D4ED8] font-bold border-t-2 border-t-[#1D4ED8]'
                   : 'text-[#4B5563] hover:bg-white/60'
               }`}
             >
-              <div>Micro Concept Registry</div>
+              <div>Micro Concept</div>
               <div className="text-[10px] text-[#15803D] mt-0.5">
-                Page 5 · Permanent Base IDs ({microConcepts.length})
+                P5 · Base IDs ({microConcepts.length})
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setRegistryPage('asked')}
+              className={`py-2.5 px-2.5 text-left sm:text-center border-r border-b lg:border-b-0 border-[#DFDDD4] transition-colors cursor-pointer ${
+                registryPage === 'asked'
+                  ? 'bg-white text-[#B45309] font-bold border-t-2 border-t-[#B45309]'
+                  : 'text-[#4B5563] hover:bg-white/60'
+              }`}
+            >
+              <div>Asked Registry</div>
+              <div className="text-[10px] text-[#B45309] mt-0.5">
+                P6 · Rules ({askedRules.length})
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setRegistryPage('given')}
+              className={`py-2.5 px-2.5 text-left sm:text-center border-r border-b lg:border-b-0 border-[#DFDDD4] transition-colors cursor-pointer ${
+                registryPage === 'given'
+                  ? 'bg-white text-[#15803D] font-bold border-t-2 border-t-[#15803D]'
+                  : 'text-[#4B5563] hover:bg-white/60'
+              }`}
+            >
+              <div>Given Registry</div>
+              <div className="text-[10px] text-[#15803D] mt-0.5">
+                P7 · Rules ({givenRules.length})
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setRegistryPage('operator')}
+              className={`py-2.5 px-2.5 text-left sm:text-center border-r border-b lg:border-b-0 border-[#DFDDD4] transition-colors cursor-pointer ${
+                registryPage === 'operator'
+                  ? 'bg-white text-[#1D4ED8] font-bold border-t-2 border-t-[#1D4ED8]'
+                  : 'text-[#4B5563] hover:bg-white/60'
+              }`}
+            >
+              <div>Operator Registry</div>
+              <div className="text-[10px] text-[#1D4ED8] mt-0.5">
+                P8 · MKML ({operatorRules.length})
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setRegistryPage('solver')}
+              className={`py-2.5 px-2.5 text-left sm:text-center transition-colors cursor-pointer ${
+                registryPage === 'solver'
+                  ? 'bg-white text-[#1D4ED8] font-bold border-t-2 border-t-[#1D4ED8]'
+                  : 'text-[#4B5563] hover:bg-white/60'
+              }`}
+            >
+              <div>Solver&apos;s Registry</div>
+              <div className="text-[10px] text-[#6B7280] mt-0.5">
+                P9 · Solver ({solverPathRules.length})
               </div>
             </button>
           </div>
@@ -2293,6 +2418,63 @@ export const ExamRegistryDashboard: React.FC<Props> = ({
                 </pre>
               </div>
             </div>
+          )}
+
+          {/* ================================================================
+              REGISTRY PAGE 6: ASKED REGISTRY (START -> END BOUNDARY RULES)
+              ================================================================ */}
+          {registryPage === 'asked' && (
+            <BoundaryRegistrySection
+              title="6) Asked Registry (Start Point → End Point Extraction Rules)"
+              subtitle="Selects the most matching boundary rule to extract what is asked; optional Combined Rule Fallback collects non-overlapping targets."
+              accentHex="#B45309"
+              addButtonLabel="6a) Add Asked Registry Rule"
+              rules={askedRules}
+              setRules={setAskedRules}
+              combineFallback={combineAskedFallback}
+              setCombineFallback={setCombineAskedFallback}
+            />
+          )}
+
+          {/* ================================================================
+              REGISTRY PAGE 7: GIVEN REGISTRY (START -> END BOUNDARY RULES)
+              ================================================================ */}
+          {registryPage === 'given' && (
+            <BoundaryRegistrySection
+              title="7) Given Registry (Start Point → End Point Extraction Rules)"
+              subtitle="Selects the most matching boundary rule to extract given equations, values, and conditions; optional Combined Rule Fallback collects non-overlapping clauses."
+              accentHex="#15803D"
+              addButtonLabel="7a) Add Given Registry Rule"
+              rules={givenRules}
+              setRules={setGivenRules}
+              combineFallback={combineGivenFallback}
+              setCombineFallback={setCombineGivenFallback}
+            />
+          )}
+
+          {/* ================================================================
+              REGISTRY PAGE 8: OPERATOR REGISTRY (MKML <math ==> BASE DICTIONARY)
+              ================================================================ */}
+          {registryPage === 'operator' && (
+            <OperatorRegistrySection
+              operatorRules={operatorRules}
+              setOperatorRules={setOperatorRules}
+            />
+          )}
+
+          {/* ================================================================
+              REGISTRY PAGE 9: SOLVER'S REGISTRY (PATH & STEP CHAIN MAPPING)
+              ================================================================ */}
+          {registryPage === 'solver' && (
+            <SolverRegistrySection
+              solverPaths={solverPathRules}
+              setSolverPaths={setSolverPathRules}
+              symbolAliases={symbolAliases}
+              setSymbolAliases={setSymbolAliases}
+              operatorRules={operatorRules}
+              concepts={concepts}
+              microConcepts={microConcepts}
+            />
           )}
         </div>
       )}

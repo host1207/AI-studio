@@ -18,7 +18,7 @@ function parseHierarchyHeader(raw) {
   return { id: trimmed, name: '' };
 }
 
-function readField(block, name, stop = /<(?:qn\s+type|Options|answer|ans|explanation|gap|text|type|id|target)\s*(?:={1,2}|>)/i) {
+function readField(block, name, stop = /<(?:qn\s+type|Options|answer|ans|explanation|gap|text|type|id|target|exam)\s*(?:={1,2}|>)/i) {
   const match = new RegExp(`<${name}\\s*={1,2}\\s*`, 'i').exec(block);
   if (!match) return '';
   const start = match.index + match[0].length;

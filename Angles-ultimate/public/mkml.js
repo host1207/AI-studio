@@ -466,18 +466,25 @@
 
   function compileQuestion(body, mode) {
     const idMatch = /<id\s*={1,2}\s*([^>]+)>/i.exec(body);
+    const examMatch = /<exam\s*={1,2}\s*([^>]+)>/i.exec(body);
     const targetMatch = /<target\s*={1,2}\s*([^>]+)>/i.exec(body);
     const midMatch = /<mid\s*={1,2}\s*([^>]+)>/i.exec(body);
     const gapMatch = /<gap\s*={1,2}\s*([^>]+)>/i.exec(body);
     const typeMatch = /<type\s*={1,2}\s*([^>]+)>/i.exec(body);
     const stepMatch = /<step\s*[-_]?id\s*={1,2}\s*([^>]+)>/i.exec(body);
     const idVal = idMatch ? idMatch[1].trim() : '';
+    let examBadgeVal = '';
+    if (examMatch) {
+      const rawEx = examMatch[1].trim();
+      const parsedEx = rawEx.match(/^(\d+)(?:\s*,\s*display\s*={1,2}\s*([\s\S]+))?$/i);
+      examBadgeVal = parsedEx ? ((parsedEx[2] || '').trim() || `Exam #${parsedEx[1]}`) : rawEx;
+    }
     const targetVal = targetMatch ? targetMatch[1].trim() : '';
     const midVal = midMatch ? midMatch[1].trim() : '';
     const typeVal = typeMatch ? typeMatch[1].trim().replace(/\s+/g, ' ').toUpperCase() : '';
     const gapVal = gapMatch ? gapMatch[1].trim() : '';
     const explicitStepVal = stepMatch ? stepMatch[1].trim().toUpperCase() : '';
-    body = body.replace(/<id\s*={1,2}\s*[^>]+>|<target\s*={1,2}\s*[^>]+>|<mid\s*={1,2}\s*[^>]+>|<gap\s*={1,2}\s*[^>]+>|<type\s*={1,2}\s*[^>]+>|<step\s*[-_]?id\s*={1,2}\s*[^>]+>/gi, '');
+    body = body.replace(/<id\s*={1,2}\s*[^>]+>|<exam\s*={1,2}\s*[^>]+>|<target\s*={1,2}\s*[^>]+>|<mid\s*={1,2}\s*[^>]+>|<gap\s*={1,2}\s*[^>]+>|<type\s*={1,2}\s*[^>]+>|<step\s*[-_]?id\s*={1,2}\s*[^>]+>/gi, '');
     const answerResult = takeAnswer(body);
     const explanationResult = takeExplanation(answerResult.source);
     const parsedSteps = parseExplanationSteps(explanationResult.value);
@@ -488,12 +495,13 @@
     const stepVal = derivedStepIds.length ? derivedStepIds.join(' · ') : explicitStepVal;
     const badges = [
       idVal ? `<span class="mkml-question-id">${escapeHtml(idVal)}</span>` : '',
+      examBadgeVal ? `<span class="mkml-question-type">${escapeHtml(examBadgeVal)}</span>` : '',
       typeVal ? `<span class="mkml-question-type">${escapeHtml(typeVal)}</span>` : '',
       stepVal ? `<span class="mkml-question-step${hasTuStep ? ' is-tu' : ''}" data-step-id="${escapeHtml(stepVal)}">STEPS · ${escapeHtml(stepVal)}</span>` : '',
       gapVal ? `<span class="mkml-question-gap">GAP · ${escapeHtml(gapVal)}</span>` : ''
     ].filter(Boolean).join('');
     let remaining = explanationResult.source.replace(/<\/?Options\s*>/gi, '');
-    const promptResult = takeField(remaining, 'text', /<(?:Options)\s*>|<[A-D](?:\s*=|\s+)|<(?:answer|ans)\s*=|<explanation(?:\s*=|\s*>)/i);
+    const promptResult = takeField(remaining, 'text', /<(?:Options)\s*>|<[A-D](?:\s*=|\s+)|<(?:answer|ans)\s*=|<explanation(?:\s*=|\s*>)|<exam\s*={1,2}/i);
     remaining = promptResult.source;
     const options = [];
     const marker = /<([A-D])(?:\s*=\s*|\s+)/gi;
@@ -1010,6 +1018,34 @@
     return `${compileMarkup(cleanExplanationText)}${diagram}${warnings.join('')}`;
   }
 
+  function stripStepCheckTags(text) {
+    const src = String(text || '');
+    const opener = /<(?:ca|wa|ask|prompt)\s*={1,2}\s*/gi;
+    let out = '';
+    let cursor = 0;
+    let m;
+    while ((m = opener.exec(src)) !== null) {
+      if (m.index < cursor) continue;
+      out += src.slice(cursor, m.index);
+      let depth = 1;
+      let i = m.index + m[0].length;
+      while (i < src.length && depth > 0) {
+        const ch = src[i];
+        if (ch === '<') depth += 1;
+        else if (ch === '>') {
+          // Ignore arrow "->" inside nested expressions
+          if (i > 0 && src[i - 1] === '-') { i += 1; continue; }
+          depth -= 1;
+        }
+        i += 1;
+      }
+      cursor = i;
+      opener.lastIndex = cursor;
+    }
+    out += src.slice(cursor);
+    return out.trim();
+  }
+
   function compileQuestionExplanation(source) {
     const raw = String(source || '');
     const steps = parseExplanationSteps(raw);
@@ -1018,7 +1054,7 @@
       const parts = [];
       for (const step of steps) {
         const before = raw.slice(cursor, step.start).trim();
-        if (before) parts.push(`<div class="mkml-exp-note">${compileExplanationFragment(before)}</div>`);
+        if (before) parts.push(`<div class="mkml-exp-note">${compileExplanationFragment(stripStepCheckTags(before))}</div>`);
         const idChips = step.stepIds.length
           ? step.stepIds.map((id) => {
               const upper = id.toUpperCase();
@@ -1032,16 +1068,16 @@
               `<span class="mkml-exp-step-num">Step ${step.stepNumber}</span>` +
               `<span class="mkml-exp-step-ids">${idChips}</span>` +
             `</div>` +
-            `<div class="mkml-exp-step-body">${compileExplanationFragment(step.body)}</div>` +
+            `<div class="mkml-exp-step-body">${compileExplanationFragment(stripStepCheckTags(step.body))}</div>` +
           `</div>`
         );
         cursor = step.end;
       }
       const after = raw.slice(cursor).trim();
-      if (after) parts.push(`<div class="mkml-exp-note">${compileExplanationFragment(after)}</div>`);
+      if (after) parts.push(`<div class="mkml-exp-note">${compileExplanationFragment(stripStepCheckTags(after))}</div>`);
       return `<div class="mkml-exp-steps">${parts.join('')}</div>`;
     }
-    return compileExplanationFragment(raw);
+    return compileExplanationFragment(stripStepCheckTags(raw));
   }
 
   function warnQuestionGraph(tag, message) { return `<span class="mkml-flow-error">${escapeHtml(tag)} skipped: ${escapeHtml(message)}</span>`; }

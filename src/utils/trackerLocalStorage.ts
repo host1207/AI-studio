@@ -6,6 +6,12 @@ import type {
 } from '../components/ExamRegistryDashboard';
 import type { ExplanationStepItem } from './mkmlStorageScanner';
 import type { TestSessionRecord } from '../components/TrackerTestAnalysis';
+import type {
+  BoundaryRuleItem,
+  OperatorRuleItem,
+  SolverPathRuleItem,
+  SymbolAliasItem,
+} from './givenAskedEngine';
 
 export const TRACKER_STORAGE_KEY = 'angles_tracker_suite_v1';
 export const NOTE_DRAFTS_STORAGE_KEY = 'angles_note_drafts_v1';
@@ -25,6 +31,115 @@ export interface PersistedTrackerState {
   activeTestSessionId: string;
   exams: ExamProfile[];
   selectedExamId: string;
+  nextExamId?: number;
+  microConceptWeaknessPoints?: Record<string, number>;
+  askedRules?: BoundaryRuleItem[];
+  givenRules?: BoundaryRuleItem[];
+  combineAskedFallback?: boolean;
+  combineGivenFallback?: boolean;
+  operatorRules?: OperatorRuleItem[];
+  solverPathRules?: SolverPathRuleItem[];
+  symbolAliases?: SymbolAliasItem[];
+}
+
+function isValidOperatorList(raw: unknown): raw is OperatorRuleItem[] {
+  return (
+    Array.isArray(raw) &&
+    raw.every(
+      (o) =>
+        o &&
+        typeof o === 'object' &&
+        typeof (o as OperatorRuleItem).id === 'string' &&
+        typeof (o as OperatorRuleItem).name === 'string' &&
+        typeof (o as OperatorRuleItem).egOutput === 'string' &&
+        typeof (o as OperatorRuleItem).symbol === 'string' &&
+        typeof (o as OperatorRuleItem).topic === 'string'
+    )
+  );
+}
+
+function isValidSolverList(raw: unknown): raw is SolverPathRuleItem[] {
+  return (
+    Array.isArray(raw) &&
+    raw.every(
+      (s) =>
+        s &&
+        typeof s === 'object' &&
+        typeof (s as SolverPathRuleItem).id === 'string' &&
+        Array.isArray((s as SolverPathRuleItem).askedAliases) &&
+        Array.isArray((s as SolverPathRuleItem).branches)
+    )
+  );
+}
+
+function isValidAliasList(raw: unknown): raw is SymbolAliasItem[] {
+  return (
+    Array.isArray(raw) &&
+    raw.every(
+      (a) =>
+        a &&
+        typeof a === 'object' &&
+        typeof (a as SymbolAliasItem).id === 'string' &&
+        Array.isArray((a as SymbolAliasItem).aliases) &&
+        typeof (a as SymbolAliasItem).canonical === 'string'
+    )
+  );
+}
+
+function upgradeLegacyDefaultGivenRules(raw: BoundaryRuleItem[]): BoundaryRuleItem[] {
+  return raw.map((rule) => {
+    if (rule.id === 'giv-1' && rule.endPoint.trim() === ', | and | then | find') {
+      return { ...rule, endPoint: ', | and* -> then | find | what | . | ?' };
+    }
+    if (rule.id === 'giv-2' && rule.endPoint.trim() === ', | . | then | find') {
+      return { ...rule, endPoint: ', | and* -> then | find | what | . | ?' };
+    }
+    return rule;
+  });
+}
+
+function normalizeExamsWithNumericIds(
+  exams: ExamProfile[],
+  savedNextExamId?: number
+): { exams: ExamProfile[]; nextExamId: number } {
+  const used = new Set<number>();
+  let maxId = 0;
+  exams.forEach((ex) => {
+    if (typeof ex.examId === 'number' && Number.isInteger(ex.examId) && ex.examId > 0) {
+      used.add(ex.examId);
+      if (ex.examId > maxId) maxId = ex.examId;
+    }
+  });
+  let assignCursor = 1;
+  const normalized = exams.map((ex) => {
+    if (typeof ex.examId === 'number' && Number.isInteger(ex.examId) && ex.examId > 0) {
+      return ex;
+    }
+    while (used.has(assignCursor)) assignCursor += 1;
+    const assigned = assignCursor;
+    used.add(assigned);
+    if (assigned > maxId) maxId = assigned;
+    assignCursor += 1;
+    return { ...ex, examId: assigned };
+  });
+  const nextExamId = Math.max(
+    maxId + 1,
+    typeof savedNextExamId === 'number' && Number.isInteger(savedNextExamId) ? savedNextExamId : 1
+  );
+  return { exams: normalized, nextExamId };
+}
+
+function sanitizeWeaknessPoints(raw: unknown): Record<string, number> {
+  if (!raw || typeof raw !== 'object') return {};
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    const key = String(k || '').trim();
+    const num = Number(v);
+    if (key && Number.isFinite(num) && num > 0) {
+      out[key] = Math.round(num);
+    }
+  }
+  return out;
 }
 
 export function isLocalStoragePersistenceEnabled(): boolean {
@@ -132,8 +247,9 @@ export function loadPersistedTrackerState(
         ? parsed.activeChapterKey
         : defaults.activeChapterKey;
 
-    const exams =
+    const rawExams =
       Array.isArray(parsed.exams) && parsed.exams.length > 0 ? parsed.exams : defaults.exams;
+    const { exams, nextExamId } = normalizeExamsWithNumericIds(rawExams, parsed.nextExamId);
     const selectedExamId =
       parsed.selectedExamId && exams.some((e) => e.id === parsed.selectedExamId)
         ? parsed.selectedExamId
@@ -169,6 +285,29 @@ export function loadPersistedTrackerState(
       activeTestSessionId: parsed.activeTestSessionId || defaults.activeTestSessionId,
       exams,
       selectedExamId,
+      nextExamId,
+      microConceptWeaknessPoints: sanitizeWeaknessPoints(parsed.microConceptWeaknessPoints),
+      askedRules: Array.isArray(parsed.askedRules) ? parsed.askedRules : defaults.askedRules,
+      givenRules: Array.isArray(parsed.givenRules)
+        ? upgradeLegacyDefaultGivenRules(parsed.givenRules)
+        : defaults.givenRules,
+      combineAskedFallback:
+        typeof parsed.combineAskedFallback === 'boolean'
+          ? parsed.combineAskedFallback
+          : defaults.combineAskedFallback,
+      combineGivenFallback:
+        typeof parsed.combineGivenFallback === 'boolean'
+          ? parsed.combineGivenFallback
+          : defaults.combineGivenFallback,
+      operatorRules: isValidOperatorList(parsed.operatorRules)
+        ? parsed.operatorRules
+        : defaults.operatorRules,
+      solverPathRules: isValidSolverList(parsed.solverPathRules)
+        ? parsed.solverPathRules
+        : defaults.solverPathRules,
+      symbolAliases: isValidAliasList(parsed.symbolAliases)
+        ? parsed.symbolAliases
+        : defaults.symbolAliases,
       restoredFromLocal: true,
       savedAt: typeof parsed.savedAt === 'string' ? parsed.savedAt : null,
     };
@@ -254,8 +393,9 @@ export async function loadDiskTrackerState(
         }
       }
     }
-    const exams =
+    const rawExams =
       Array.isArray(parsed.exams) && parsed.exams.length > 0 ? parsed.exams : defaults.exams;
+    const { exams, nextExamId } = normalizeExamsWithNumericIds(rawExams, parsed.nextExamId);
     return {
       activeChapterKey:
         parsed.activeChapterKey && mergedLedgers[parsed.activeChapterKey]
@@ -279,6 +419,29 @@ export async function loadDiskTrackerState(
         parsed.selectedExamId && exams.some((e) => e.id === parsed.selectedExamId)
           ? parsed.selectedExamId
           : exams[0]?.id || defaults.selectedExamId,
+      nextExamId,
+      microConceptWeaknessPoints: sanitizeWeaknessPoints(parsed.microConceptWeaknessPoints),
+      askedRules: Array.isArray(parsed.askedRules) ? parsed.askedRules : defaults.askedRules,
+      givenRules: Array.isArray(parsed.givenRules)
+        ? upgradeLegacyDefaultGivenRules(parsed.givenRules)
+        : defaults.givenRules,
+      combineAskedFallback:
+        typeof parsed.combineAskedFallback === 'boolean'
+          ? parsed.combineAskedFallback
+          : defaults.combineAskedFallback,
+      combineGivenFallback:
+        typeof parsed.combineGivenFallback === 'boolean'
+          ? parsed.combineGivenFallback
+          : defaults.combineGivenFallback,
+      operatorRules: isValidOperatorList(parsed.operatorRules)
+        ? parsed.operatorRules
+        : defaults.operatorRules,
+      solverPathRules: isValidSolverList(parsed.solverPathRules)
+        ? parsed.solverPathRules
+        : defaults.solverPathRules,
+      symbolAliases: isValidAliasList(parsed.symbolAliases)
+        ? parsed.symbolAliases
+        : defaults.symbolAliases,
       savedAt: typeof parsed.savedAt === 'string' ? parsed.savedAt : null,
     };
   } catch {

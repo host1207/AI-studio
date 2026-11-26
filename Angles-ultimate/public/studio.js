@@ -32,7 +32,7 @@ function setPage(page) {
   const previousPage = state.page;
   if (previousPage === 'coding' && page !== 'coding' && state.isDirty) void flushSave();
   state.page = page;
-  const routeTarget = (page === 'exam-info' || page === 'registry') ? 'tracker' : page;
+  const routeTarget = (page === 'exam-info' || page === 'registry' || page === 'qiq' || page === 'tester') ? 'tracker' : page;
   $$('.page').forEach((section) => section.classList.toggle('is-visible', section.dataset.route === routeTarget));
   $$('.nav-item').forEach((button) => button.classList.toggle('is-active', button.dataset.page === page));
   const diskDetails = $('#tracker-disk-ledger-details');
@@ -45,6 +45,8 @@ function setPage(page) {
   if (page === 'tracker' && window.openTrackerSection && !state._openingScopedCards) window.openTrackerSection('part-1');
   if (page === 'exam-info' && window.openTrackerSection) window.openTrackerSection('exam-page-1');
   if (page === 'registry' && window.openTrackerSection) window.openTrackerSection('registry');
+  if (page === 'qiq' && window.openTrackerSection) window.openTrackerSection('qiq');
+  if (page === 'tester' && window.openTrackerSection) window.openTrackerSection('tester');
   if (routeTarget === 'tracker' && !window.__ANGLES_TRACKER_MOUNTED__) {
     setTimeout(() => {
       if (!window.__ANGLES_TRACKER_MOUNTED__) renderTrackerBundleFallback(window.__ANGLES_TRACKER_ERROR__);
@@ -859,8 +861,8 @@ function setupEvents() {
   $$('.nav-item, [data-page="folders"], [data-page="coding"], [data-page="registry"]').forEach((button) => button.addEventListener('click', () => setPage(button.dataset.page)));
   window.addEventListener('angles:sync-nav', (event) => {
     const syncedPage = event?.detail?.page;
-    if (!['tracker', 'exam-info', 'registry'].includes(syncedPage)) return;
-    if (!['tracker', 'exam-info', 'registry'].includes(state.page)) return;
+    if (!['tracker', 'exam-info', 'registry', 'qiq', 'tester'].includes(syncedPage)) return;
+    if (!['tracker', 'exam-info', 'registry', 'qiq', 'tester'].includes(state.page)) return;
     state.page = syncedPage;
     $$('.nav-item').forEach((button) => button.classList.toggle('is-active', button.dataset.page === syncedPage));
     const diskDetails = $('#tracker-disk-ledger-details');
@@ -994,4 +996,4 @@ function setupEvents() {
 }
 window.openQuestionFile = async (folder, file) => { await openChapter(folder); await openFile(file); setPage('coding'); };
 function updateClock() { $('#topbar-clock').textContent = new Intl.DateTimeFormat([], { hour: '2-digit', minute: '2-digit' }).format(new Date()); }
-setupGridLabels(); setupEvents(); setPreviewZoom(state.previewZoom); updateClock(); setInterval(updateClock, 30000); loadChapters(); const initialPage = window.location.hash.slice(1); if (['coding', 'preview', 'graph', 'shortcuts', 'settings', 'question-index', 'tracker', 'exam-info', 'registry'].includes(initialPage)) setPage(initialPage);
+setupGridLabels(); setupEvents(); setPreviewZoom(state.previewZoom); updateClock(); setInterval(updateClock, 30000); loadChapters(); const initialPage = window.location.hash.slice(1); if (['coding', 'preview', 'graph', 'shortcuts', 'settings', 'question-index', 'tracker', 'exam-info', 'registry', 'qiq', 'tester'].includes(initialPage)) setPage(initialPage);

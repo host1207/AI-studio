@@ -782,6 +782,15 @@ export interface MicroConceptInvolvedQuestion {
   stepChainId: string;
 }
 
+export type MicroDiagnosticStatus =
+  | 'CRITICAL WEAK'
+  | 'WEAK STEP'
+  | 'MODERATE'
+  | 'STRONG'
+  | 'UNATTEMPTED';
+
+export type MicroDiagnosticSortMode = 'weakness' | 'failure-pct' | 'wrong-count' | 'step-id';
+
 export interface MicroConceptDiagnosticRow {
   microConceptId: string; // e.g. QA-TD-T4
   stepCode: string; // e.g. T1, T2, T3, T4, TG
@@ -796,9 +805,67 @@ export interface MicroConceptDiagnosticRow {
   correctToWrongRatioLabel: string;
   rawAccuracyPct: number; // (C / Attempted) * 100
   wrongRatePct: number; // (W / Attempted) * 100
+  /** Percentage failure severity counting Wrong = 1.0 and Skip = 0.5: ((W + 0.5*S) / Attempted) * 100 */
+  failureRatePct: number;
+  /**
+   * Confidence-adjusted percentage weakness score (0–100):
+   * failureRatePct * (n / (n + 1)) == ((W + 0.5*S) / (n + 1)) * 100.
+   * Prevents high-frequency 50% MCs (5C:5W -> 45.5) from overshadowing 100%-broken MCs (0C:2W -> 66.7),
+   * while still keeping proven high-volume failures (1C:9W -> 81.8) above single-question noise (0C:1W -> 50.0).
+   */
+  weaknessIndex: number;
+  sampleConfidence: 'NONE' | 'LOW' | 'MEDIUM' | 'HIGH';
   netAccuracyMarks: number; // C*1.0 - W*0.5 - S*0.2
   netAccuracyValuationPct: number; // (netAccuracyMarks / Attempted) * 100
-  diagnosticStatus: 'WEAK STEP' | 'MODERATE' | 'STRONG' | 'UNATTEMPTED';
+  diagnosticStatus: MicroDiagnosticStatus;
+}
+
+export function sortMicroConceptDiagnostics(
+  rows: MicroConceptDiagnosticRow[],
+  mode: MicroDiagnosticSortMode = 'weakness'
+): MicroConceptDiagnosticRow[] {
+  const copy = [...rows];
+  if (mode === 'step-id') {
+    return copy.sort((a, b) =>
+      a.stepCode.localeCompare(b.stepCode, undefined, { numeric: true })
+    );
+  }
+  return copy.sort((a, b) => {
+    const aAtt = a.attemptedQuestionsCount > 0 ? 1 : 0;
+    const bAtt = b.attemptedQuestionsCount > 0 ? 1 : 0;
+    if (aAtt !== bAtt) return bAtt - aAtt;
+    if (mode === 'failure-pct') {
+      return (
+        b.failureRatePct - a.failureRatePct ||
+        b.attemptedQuestionsCount - a.attemptedQuestionsCount ||
+        b.wrongCount - a.wrongCount ||
+        a.stepCode.localeCompare(b.stepCode, undefined, { numeric: true })
+      );
+    }
+    if (mode === 'wrong-count') {
+      return (
+        b.wrongCount - a.wrongCount ||
+        b.failureRatePct - a.failureRatePct ||
+        b.skippedCount - a.skippedCount ||
+        a.stepCode.localeCompare(b.stepCode, undefined, { numeric: true })
+      );
+    }
+    return (
+      b.weaknessIndex - a.weaknessIndex ||
+      b.failureRatePct - a.failureRatePct ||
+      b.wrongCount - a.wrongCount ||
+      b.attemptedQuestionsCount - a.attemptedQuestionsCount ||
+      a.stepCode.localeCompare(b.stepCode, undefined, { numeric: true })
+    );
+  });
+}
+
+export function pickWeakestMicroStep(
+  rows: MicroConceptDiagnosticRow[]
+): MicroConceptDiagnosticRow | null {
+  const attempted = rows.filter((r) => r.attemptedQuestionsCount > 0);
+  if (attempted.length === 0) return null;
+  return sortMicroConceptDiagnostics(attempted, 'weakness')[0] || null;
 }
 
 export function computeMicroConceptDiagnostics(
@@ -863,6 +930,23 @@ export function computeMicroConceptDiagnostics(
       attemptedQuestionsCount > 0 ? (correctCount / attemptedQuestionsCount) * 100 : 0;
     const wrongRatePct =
       attemptedQuestionsCount > 0 ? (wrongCount / attemptedQuestionsCount) * 100 : 0;
+    const effectiveFailures = wrongCount + skippedCount * 0.5;
+    const failureRatePct =
+      attemptedQuestionsCount > 0 ? (effectiveFailures / attemptedQuestionsCount) * 100 : 0;
+    // Bayesian / Laplace confidence-adjusted percentage weakness (0-100):
+    // failureRatePct * (n / (n + 1)) == ((W + 0.5*S) / (n + 1)) * 100
+    const weaknessIndex =
+      attemptedQuestionsCount > 0
+        ? Number(((effectiveFailures / (attemptedQuestionsCount + 1)) * 100).toFixed(1))
+        : 0;
+    const sampleConfidence: 'NONE' | 'LOW' | 'MEDIUM' | 'HIGH' =
+      attemptedQuestionsCount === 0
+        ? 'NONE'
+        : attemptedQuestionsCount <= 2
+          ? 'LOW'
+          : attemptedQuestionsCount <= 5
+            ? 'MEDIUM'
+            : 'HIGH';
     const netAccuracyMarks = Number(
       (correctCount * 1.0 - wrongCount * 0.5 - skippedCount * 0.2).toFixed(2)
     );
@@ -899,11 +983,13 @@ export function computeMicroConceptDiagnostics(
           ? regMatch.baseId || resolvedStepCode
           : `UNREGISTERED · ${chapterCode}-${stepCode}`;
 
-    let diagnosticStatus: 'WEAK STEP' | 'MODERATE' | 'STRONG' | 'UNATTEMPTED' = 'UNATTEMPTED';
+    let diagnosticStatus: MicroDiagnosticStatus = 'UNATTEMPTED';
     if (attemptedQuestionsCount > 0) {
-      if (rawAccuracyPct <= 60 || (wrongCount > 0 && rawAccuracyPct < 75)) {
+      if (weaknessIndex >= 55 || (failureRatePct >= 60 && attemptedQuestionsCount >= 2)) {
+        diagnosticStatus = 'CRITICAL WEAK';
+      } else if (weaknessIndex >= 35 || (failureRatePct >= 40 && attemptedQuestionsCount >= 2)) {
         diagnosticStatus = 'WEAK STEP';
-      } else if (rawAccuracyPct < 85) {
+      } else if (weaknessIndex >= 15 || rawAccuracyPct < 85) {
         diagnosticStatus = 'MODERATE';
       } else {
         diagnosticStatus = 'STRONG';
@@ -924,15 +1010,16 @@ export function computeMicroConceptDiagnostics(
       correctToWrongRatioLabel: `${correctCount} C : ${wrongCount} W`,
       rawAccuracyPct,
       wrongRatePct,
+      failureRatePct,
+      weaknessIndex,
+      sampleConfidence,
       netAccuracyMarks,
       netAccuracyValuationPct,
       diagnosticStatus,
     });
   });
 
-  // Sort by stepCode (T1, T2, T3...)
-  rows.sort((a, b) => a.stepCode.localeCompare(b.stepCode, undefined, { numeric: true }));
-  return rows;
+  return sortMicroConceptDiagnostics(rows, 'weakness');
 }
 
 
